@@ -167,8 +167,7 @@ get_hf_token()
 from datasets import load_dataset
 from transformer_lens import HookedTransformer
 from sae_lens import SAE
-
-model = HookedTransformer.from_pretrained("gemma-2-2b", device=device)
+model = HookedTransformer.from_pretrained("gemma-2-2b", device=device, dtype=torch.float16)
 
 # the cfg dict is returned alongside the SAE since it may contain useful information for analysing the SAE (eg: instantiating an activation store)
 # Note that this is not the same as the SAEs config dict, rather it is whatever was in the HF repo, from which we can extract the SAE config dict
@@ -188,6 +187,8 @@ M_Decoder.shape
 Gram_Decoder = sklearn.metrics.pairwise.cosine_similarity(M_Decoder)
 np.fill_diagonal(Gram_Decoder, np.zeros(Gram_Decoder.shape[0]))
 Gram_Decoder
+
+Gram_Decoder.shape
 
 Gram_Decoder.max()
 
@@ -223,12 +224,6 @@ tracker.log_plot_to_trackio("W_d (normalized) Gram matrix heatmap", {})# pd.Data
 
 M_Decoder.shape
 
-mutual_coherence_lower_bound(*M_Decoder.T.shape)
-
-mutual_coherence_lower_bound(10000, 2304)
-
-mutual_coherence_lower_bound(np.arange(10000, 256000), 2304)
-
 
 # +
 
@@ -244,12 +239,15 @@ K = 2304
 plt.plot(np.arange(K+1, 256000),mutual_coherence_lower_bound(np.arange(K+1, 256000), K))
 get_plot_as_img()
 # -
+mutual_coherence_lower_bound(16000, 2304)
 
 
+# +
+#trackio.finish()
 
-trackio.finish()
-
-trackio.Image()
+# +
+#trackio.Image()
+# -
 
 from transformer_lens.utils import tokenize_and_concatenate
 
@@ -263,7 +261,7 @@ token_dataset = tokenize_and_concatenate(
     dataset=dataset,  # type: ignore
     tokenizer=model.tokenizer,  # type: ignore
     streaming=True,
-    max_length=sae.cfg.metadata.context_size,
+    max_length=128,#sae.cfg.metadata.context_size,
     add_bos_token=sae.cfg.metadata.prepend_bos,
 )
 
@@ -286,9 +284,38 @@ We'll calculate:
 
 sae.eval()  # prevents error if we're expecting a dead neuron mask for who grads
 
+# +
+batch_tokens = token_dataset[:32]["tokens"]
+
+batch_tokens.shape
+
+# +
+from torch.profiler import profile, ProfilerActivity, record_function
+
+activities = [ProfilerActivity.CPU]
+if torch.cuda.is_available():
+    activities += [ProfilerActivity.CUDA]
+
+with profile(activities=activities, record_shapes=True, profile_memory=True) as prof:
+    with record_function("model_inference"):
+        with torch.no_grad():
+            # activation store can give us tokens.
+            batch_tokens = token_dataset[:8]["tokens"]
+            _, cache = model.run_with_cache(batch_tokens, prepend_bos=True)
+
+# -
+
+print(
+    prof.key_averages(group_by_input_shape=True).table(
+        sort_by="cpu_time_total", row_limit=10
+    )
+)
+
+
+# %%time
 with torch.no_grad():
     # activation store can give us tokens.
-    batch_tokens = token_dataset[:32]["tokens"]
+    batch_tokens = token_dataset[:16]["tokens"]
     _, cache = model.run_with_cache(batch_tokens, prepend_bos=True)
 
     # Use the SAE
