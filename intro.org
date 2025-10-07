@@ -1,0 +1,61 @@
+#+title: Intro
+
+
+* Sparse autoencoders meet sparse approximation theory
+:PROPERTIES:
+:CREATED:  <2025-10-03 Fri> [23:06]
+:END:
+
+Sparse autoencoders are used in mechanistic interpretability because such features are naturally more legible, and there is some evidence for other desirable properties like monosemanticity. Although many different approaches for enforcing sparsity were proposed, they typically achieve sparsity via regularization or specialized activation functions, with only TopK and BatchTopK controlling it explicitly. This approach to enforcing sparsity is mostly determined by the hyperparameter choice before training. Although we can heuristically sparsify the representation using top-k with k selected after training, it is not obvious how this effects reconstruction error. This problem motivates going back to established sparse representation methods -- in addition to viewing the problem in a new light we will propose an alternative approach to SAE inference.
+
+** Motivating example
+:PROPERTIES:
+:CREATED:  <2025-10-03 Fri> [23:07]
+:END:
+
+Consider the sparse coding problem:
+$$\hat{\alpha} = \arg\min_\alpha \frac{1}{2}\|D\alpha - x\|_2^2 + \lambda \cdot \rho(\alpha)$$
+where $D$ is the decoder (dictionary), $x$ is the input signal, $\alpha$ is the sparse representation, and $\rho(\alpha)$ is a sparsity-promoting penalty function.
+
+*** The orthogonal case
+
+When $D$ is orthogonal ($D^T D = I$), this problem has a remarkably simple closed-form solution. Exploiting the orthogonality property:
+\begin{align*}
+f(\alpha) &= \frac{1}{2}\|D\alpha - x\|_2^2 + \lambda \cdot \rho(\alpha) \\
+&= \frac{1}{2}\|D\alpha - DD^T x\|_2^2 + \lambda \cdot \rho(\alpha) \\
+&= \frac{1}{2}\|D(\alpha - \beta)\|_2^2 + \lambda \cdot \rho(\alpha) \\
+&= \frac{1}{2}\|\alpha - \beta\|_2^2 + \lambda \cdot \rho(\alpha)
+\end{align*}
+where $\beta = D^T x$ and we used that $D$ preserves norms.
+
+The key insight is that this objective *separates into independent scalar optimization problems*:
+$$f(\alpha) = \sum_{j=1}^k \left[\frac{1}{2}(\alpha_j - \beta_j)^2 + \lambda \cdot \rho(\alpha_j)\right]$$
+
+Each coefficient can be optimized independently via simple shrinkage:
+- *Hard-thresholding* ($\ell_0$): $\alpha_j = \beta_j$ if $|\beta_j| \geq \sqrt{2\lambda}$, else $\alpha_j = 0$
+- *Soft-thresholding* ($\ell_1$): $\alpha_j = \text{sign}(\beta_j) \max(|\beta_j| - \lambda, 0)$
+
+*** Generalization via Restricted Isometry Property
+
+For overcomplete dictionaries ($k > n$), we cannot have $D^T D = I$. However, if $D$ satisfies the Restricted Isometry Property (RIP) with constant $\delta_s$ for $s$-sparse vectors:
+$$(1 - \delta_s)\|\alpha\|_2^2 \leq \|D\alpha\|_2^2 \leq (1 + \delta_s)\|\alpha\|_2^2$$
+
+Then for sparse $\alpha - \beta$:
+$$(1 - \delta_s)\|\alpha - \beta\|_2^2 \leq \|D(\alpha - \beta)\|_2^2 \leq (1 + \delta_s)\|\alpha - \beta\|_2^2$$
+
+This means the objective becomes *approximately* separable when $\delta_s \ll 1$:
+$$f(\alpha) \approx \frac{1}{2}\|\alpha - \beta\|_2^2 + \lambda \cdot \rho(\alpha) + \text{small coupling terms}$$
+
+*Key insight:* RIP is like "approximate orthogonality" for sparse vectors. When $\delta_s$ is small, the dictionary behaves almost like an orthogonal matrix on the subspace of $s$-sparse vectors, making coordinate-wise shrinkage operations effective approximations even for redundant dictionaries.
+
+*** Connection to sparse autoencoders
+
+In SAE terminology: $D$ is the decoder, $D^T$ is the encoder, and $\beta = D^T x$ are the pre-activation features. The analysis above suggests:
+1. If the decoder is approximately orthogonal (or satisfies good RIP), simple element-wise operations on pre-activations should work well
+2. The sparsity level $s$ and RIP constant $\delta_s$ determine how well the coordinate-wise approximation holds
+3. This provides theoretical justification for TopK-style sparsification after encoding
+
+** Experiment: decoding vs just selecting topk
+:PROPERTIES:
+:CREATED:  <2025-10-03 Fri> [23:15]
+:END:
