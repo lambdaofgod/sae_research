@@ -1,2 +1,9 @@
 #+title: Experiment Log
 
+* SAE notebook - setup
+:PROPERTIES:
+:CREATED:  <2025-10-08 Wed> [01:43]
+:END:
+
+Niestety wygląda na to że na SAE Lens/transformer lens ma problemy...
+Na RTX model poprawnie ma średnią L0 ~ 301 ale na MPS jest to z 1.5k
