@@ -182,11 +182,13 @@ import sklearn
 
 modules = sae.mod_dict
 
-M_Decoder = model.unembed.W_U.cpu().numpy()
+M_Decoder = sae.W_dec.cpu().numpy()
 M_Decoder.shape
 Gram_Decoder = sklearn.metrics.pairwise.cosine_similarity(M_Decoder)
 np.fill_diagonal(Gram_Decoder, np.zeros(Gram_Decoder.shape[0]))
 Gram_Decoder
+
+
 
 Gram_Decoder.shape
 
@@ -206,16 +208,19 @@ upper_triangular = Gram_Decoder[np.triu_indices(Gram_Decoder.shape[0], k=1)]
 coherences = pd.Series(upper_triangular.reshape(-1))
 coherences.describe()
 
-tracker.log_dataframe_to_trackio("W_d coherences", pd.DataFrame(coherences))# pd.DataFrame(Gram_Decoder))
+# +
+#tracker.log_dataframe_to_trackio("W_d coherences", pd.DataFrame(coherences))# pd.DataFrame(Gram_Decoder))
 
-tracker.log_dataframe_to_trackio("W_d coherences summary", pd.DataFrame(coherences.describe()))# pd.DataFrame(Gram_Decoder))
+# +
+#tracker.log_dataframe_to_trackio("W_d coherences summary", pd.DataFrame(coherences.describe()))# pd.DataFrame(Gram_Decoder))
+# -
 
-coherences.quantile(0.95)
+coherences.quantile(0.99)
+
+coherences.plot.hist()
 
 sns.histplot(coherences)
-
-sns.histplot(coherences)
-tracker.log_plot_to_trackio("W_d coherence histogram", {})
+#tracker.log_plot_to_trackio("W_d coherence histogram", {})
 
 coherences.quantile(0.90)
 
@@ -330,6 +335,12 @@ with torch.no_grad():
     print("average l0", l0.mean().item())
     px.histogram(l0.flatten().cpu().numpy()).show()
 
+feature_acts.shape
+
+sae_out.shape
+
+
+
 """Note that while the mean L0 is 64, it varies with the specific activation.
 
 To estimate reconstruction performance, we calculate the CE loss of the model with and without the SAE being used in place of the activations. This will vary depending on the tokens.
@@ -339,10 +350,20 @@ To estimate reconstruction performance, we calculate the CE loss of the model wi
 from transformer_lens import utils
 from functools import partial
 
+sae.W_dec.shape
+
 
 # next we want to do a reconstruction test.
 def reconstr_hook(activation, hook, sae_out):
     return sae_out
+
+
+def get_topk_by_abs(X, dim):
+    pass
+
+
+def hard_thresholding_hook(activation, hook, sae_out):
+    return 
 
 
 def zero_abl_hook(activation, hook):
