@@ -99,7 +99,7 @@ class SAELensTracker(Tracker):
 sae_config = dict(
     
     release="gemma-scope-2b-pt-res",  # see other options in sae_lens/pretrained_saes.yaml
-    sae_id="layer_21/width_16k/average_l0_301",
+    sae_id="layer_19/width_16k/average_l0_279",
 )
 
 tracker = SAELensTracker("sae_experiments", sae_config)#, space_id="lambdaofgod/sae_experiments")
@@ -219,13 +219,17 @@ coherences.quantile(0.99)
 
 coherences.plot.hist()
 
-sns.histplot(coherences)
+# +
+#sns.histplot(coherences)
 #tracker.log_plot_to_trackio("W_d coherence histogram", {})
+# -
 
 coherences.quantile(0.90)
 
-sns.heatmap(Gram_Decoder)
-tracker.log_plot_to_trackio("W_d (normalized) Gram matrix heatmap", {})# pd.DataFrame(Gram_Decoder))
+# +
+#sns.heatmap(Gram_Decoder)
+#tracker.log_plot_to_trackio("W_d (normalized) Gram matrix heatmap", {})# pd.DataFrame(Gram_Decoder))
+# -
 
 M_Decoder.shape
 
@@ -317,15 +321,17 @@ print(
 )
 
 
+
+
 # %%time
 with torch.no_grad():
     # activation store can give us tokens.
-    batch_tokens = token_dataset[:16]["tokens"]
+    batch_tokens = token_dataset[:4]["tokens"]
     _, cache = model.run_with_cache(batch_tokens, prepend_bos=True)
 
     # Use the SAE
     feature_acts = sae.encode(cache[sae.cfg.metadata.hook_name])
-    sae_out = sae.decode(feature_acts)
+    sae_out = sae.decode(feature_acts).half()
 
     # save some room
     del cache
@@ -334,12 +340,6 @@ with torch.no_grad():
     l0 = (feature_acts[:, 1:] > 0).float().sum(-1).detach()
     print("average l0", l0.mean().item())
     px.histogram(l0.flatten().cpu().numpy()).show()
-
-feature_acts.shape
-
-sae_out.shape
-
-
 
 """Note that while the mean L0 is 64, it varies with the specific activation.
 
@@ -353,26 +353,209 @@ from functools import partial
 sae.W_dec.shape
 
 
-# next we want to do a reconstruction test.
-def reconstr_hook(activation, hook, sae_out):
-    return sae_out
+# +
+## Tutaj coś jest nie halo, za dużo jest wyzerowane
+
+# +
+def threshold_topk(acts, topk):
+    acts_topk = torch.topk(acts.abs(), topk, dim=-1)
+    acts_topk = torch.zeros_like(acts).scatter(
+        -1, acts_topk.indices, torch.gather(acts, -1, acts_topk.indices)
+    )
+    return acts_topk
+
+
+def instance_threshold_topk(acts, topk):
+    acts_flat = acts.reshape(acts.shape[0], -1)
+    abs_acts_topk = torch.topk(acts_flat.abs(), topk * acts.shape[1], dim=-1)
+    acts_out = torch.zeros_like(acts_flat).scatter(
+        -1, abs_acts_topk.indices, torch.gather(acts_flat, -1, abs_acts_topk.indices)
+    )
+    return acts_out.reshape(acts.shape)
+
+
+def iterative_hard_thresholding(A, y, b, topk):
+    x_next = (y-b) @ A.T
+    return threshold_topk(x_next, topk)
+
+
+def instance_iterative_hard_thresholding(A, y, b, topk):
+    x_next = (y-b) @ A.T
+    return instance_threshold_topk(x_next, topk)
+
+
+# -
+
+# Naive code with thresholding + least squares on support
+
+# +
+def sparse_lstq(A, Y, support):
+    """
+    find X
+    A[:,support]X = Y
+    """
+    A_in = A[support].float().T
+    Y_in = Y.float().T
+    coefficients = torch.linalg.lstsq(A_in, Y_in).solution.T
+    x = torch.zeros(Y.shape[0], A.shape[0]).to(Y.device)
+    x[:,support] = coefficients
+    return x
+
+def instance_thresholding_support(W_dec, y, topk):
+    """
+    get support like in thresholding algorithm and then fit linear regression on this support
+    """
+    return torch.topk((y @ W_dec.T).abs(), topk).indices[:,-1].unique()
+
+
+def instance_thresholding_pursuit(acts, W_dec, topk):
+    x = torch.zeros(*acts.shape[:2], W_dec.shape[0]).to(acts.device).half()
+    for i in range(acts.shape[0]):
+        Y = acts[i]
+        support = instance_thresholding_support(W_dec, acts, topk)
+        coeffs = sparse_lstq(W_dec, Y, support)
+
+        x[i] = coeffs
+    return x
+
+
+# -
+
+W_dec.device
+
+A = torch.eye(5)
+
+torch.topk(A, 2).indices[:,-1]
+
+
+
+A = W_dec
+Y = sae_out[0]
+
+torch.linalg.norm(sparse_lstsq(A, Y - b_dec, 10) + b_dec - sae_out[0], ord="fro")
+
+x_candidate = feature_acts[0,2]
+indices = x_candidate.nonzero().flatten()
+
+torch.topk((sae_out @ W_dec.T).abs(), )
+
+instance_thresholding_support(W_dec, sae_out, 10)
+
+
+def instance_thresholding_pursuit(acts, W_dec, topk):
+    x = torch.zeros(*acts.shape[:2], W_dec.shape[0]).to(acts.device).half()
+    for i in range(acts.shape[0]):
+        Y = acts[i]
+        support = instance_thresholding_support(W_dec, acts, topk)
+        coeffs = sparse_lstq(W_dec, Y, support)
+
+        x[i] = coeffs
+    return x
+
+
+# +
+
+print_l0(instance_thresholding_pursuit(sae_out, W_dec, 10))
+
+# +
+#torch.linalg.lstsq(W_dec[indices], torch.topk(sae_out[0,2], 10).values.unsqueeze(0))
+# -
+
+sae_out[0,1].unsqueeze(0).shape
+
+W_dec[indices].unsqueeze(0).shape
+
+sae_out[0,2] - b_dec
+
+??sae.decode
+
+indices
+
+W_dec[indices,:].shape
+
+sae_out[0,1]
+
+# +
+#iterative_hard_thresholding(sae.W_dec, sae_out, 100).shape
+# -
+
+W_dec.shape
+
+
+
+batch_tokens.shape
 
 
 def get_topk_by_abs(X, dim):
-    pass
+    return torch.topk
 
 
-def hard_thresholding_hook(activation, hook, sae_out):
-    return 
+??sae.decode
+
+??sae.encode
 
 
+# +
+def count_l0_per_token(x):
+    l0 = (x[:, 1:] > 0).float().sum(-1).detach()
+    return l0
+
+
+def count_l0_per_instance(x):
+    l0 = (x[:, 1:] > 0).float().max(1).values.sum(-1).detach()
+    return l0
+
+def print_l0(x):
+    print(f"l0 per token: {count_l0_per_token(x).mean().item()}")
+    print(f"l0 per instance: {count_l0_per_instance(x).mean().item()}")
+
+
+# +
+W_dec = sae.W_dec.half()
+b_dec = sae.b_dec.half()
+b_enc = sae.b_enc.half()
+
+
+# next we want to do a reconstruction test.
+EPS = 1e-8
+
+def reconstr_hook(activation, hook, sae_out):
+    print("sae nonzero")
+    print_l0(feature_acts)
+    return sae_out
+
+
+def hard_thresholding_hook(activation, hook):
+    x =  iterative_hard_thresholding(W_dec, activation, b_dec, 100)
+    print("iht nonzero")
+    print_l0(x)
+    return x @ W_dec + b_dec
+
+
+def instance_hard_thresholding_hook(activation, hook):
+    x =  instance_iterative_hard_thresholding(W_dec, activation, b_dec, 100)
+    print("instance iht nonzero")
+    print_l0(x)
+    return x @ W_dec + b_dec
+
+
+def instance_thresholding_pursuit_hook(activation, hook):
+    x = instance_thresholding_pursuit(activation - b_dec, W_dec, 3)
+    print("pursuit nonzero")
+    print_l0(x)
+    return x @ W_dec + b_dec
+
+
+# -
 def zero_abl_hook(activation, hook):
     return torch.zeros_like(activation)
 
 
+print("###")
 print("Orig", model(batch_tokens, return_type="loss").item())
+print("###")
 print(
-    "reconstr",
+    "reconstr_sae",
     model.run_with_hooks(
         batch_tokens,
         fwd_hooks=[
@@ -384,6 +567,34 @@ print(
         return_type="loss",
     ).item(),
 )
+print("###")
+print(
+    "reconstr_iht",
+    model.run_with_hooks(
+        batch_tokens,
+        return_type="loss",
+        fwd_hooks=[(sae.cfg.metadata.hook_name, hard_thresholding_hook)],
+    ).item(),
+)
+print("###")
+print(
+    "reconstr_instance_iht",
+    model.run_with_hooks(
+        batch_tokens,
+        return_type="loss",
+        fwd_hooks=[(sae.cfg.metadata.hook_name, instance_hard_thresholding_hook)],
+    ).item(),
+)
+print("###")
+print(
+    "reconstr_instance_thresholding_pursuit",
+    model.run_with_hooks(
+        batch_tokens,
+        return_type="loss",
+        fwd_hooks=[(sae.cfg.metadata.hook_name, instance_thresholding_pursuit_hook)],
+    ).item(),
+)
+print("###")
 print(
     "Zero",
     model.run_with_hooks(
@@ -413,7 +624,7 @@ def reconstr_hook(activations, hook, sae_out):
 
 
 def zero_abl_hook(mlp_out, hook):
-    return torch.zeros_like(mlp_out)
+    return torch.zeros_like(mlp_out) 
 
 
 hook_name = sae.cfg.metadata.hook_name

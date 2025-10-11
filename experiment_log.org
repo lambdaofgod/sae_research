@@ -7,3 +7,93 @@
 
 Niestety wygląda na to że na SAE Lens/transformer lens ma problemy...
 Na RTX model poprawnie ma średnią L0 ~ 301 ale na MPS jest to z 1.5k
+
+
+
+* Thresholding pursuit
+:PROPERTIES:
+:CREATED:  <2025-10-11 Sat> [18:34]
+:END:
+
+Odpaliłem coś takiego (acts=Y jest $B \times L \times H$, $W_{dec}$ jest $D \times H$ - rozmiar słownika razy rozmiar warstwy ukrytej)
+
+#+BEGIN_SRC python :session experiment_log.org  :exports both
+def sparse_lstq(A, Y, support):
+    """
+    find X
+    A[:,support]X = Y
+    """
+    A_in = A[support].float().T
+    Y_in = Y.float().T
+    coefficients = torch.linalg.lstsq(A_in, Y_in).solution.T
+    x = torch.zeros(Y.shape[0], A.shape[0]).to(Y.device)
+    x[:,support] = coefficients
+    return x
+
+def instance_thresholding_support(W_dec, y, topk):
+    """
+    get support like in thresholding algorithm and then fit linear regression on this support
+    """
+    return torch.topk((y @ W_dec.T).abs(), topk, dim=-1).indices.flatten().unique()
+
+
+def instance_thresholding_pursuit(acts, W_dec, topk):
+    x = torch.zeros(*acts.shape[:2], W_dec.shape[0]).to(acts.device).half()
+    for i in range(acts.shape[0]):
+        Y = acts[i]
+        support = instance_thresholding_support(W_dec, acts, topk)
+        coeffs = sparse_lstq(W_dec, Y, support)
+
+        x[i] = coeffs
+    return x
+#+END_SRC
+
+W skrócie biorę nośnik topk per
+
+** Ciekawe obserwacje
+:PROPERTIES:
+:CREATED:  <2025-10-11 Sat> [18:39]
+:END:
+
+To jest z SAE
+
+#+BEGIN_SRC python :session experiment_log.org  :exports both
+sae_config = dict(
+
+    release="gemma-scope-2b-pt-res",  # see other options in sae_lens/pretrained_saes.yaml
+    sae_id="layer_19/width_16k/average_l0_279",
+)
+#+END_SRC
+
+
+#+BEGIN_QUOTE
+Orig 3.2734375
+###
+sae nonzero
+l0 per token: 315.0157470703125
+l0 per instance: 6891.25
+reconstr_sae 3.73046875
+###
+iht nonzero
+l0 per token: 86.93897247314453
+l0 per instance: 3329.5
+reconstr_iht 3.9453125
+###
+instance iht nonzero
+l0 per token: 55.86023712158203
+l0 per instance: 2643.75
+reconstr_instance_iht 3.931640625
+###
+pursuit nonzero
+l0 per token: 280.2775573730469
+l0 per instance: 530.0
+reconstr_instance_thresholding_pursuit 3.953125
+###
+Zero 12.453125
+#+END_QUOTE
+
+Czyli wygląda jakby dla tego modelu który ma dosyć wysokie l0 nasz model miał per-token podobne l0
+ale za to per cały tekst u nas jest znacznie lepiej
+
+Co zabawniej to jak l0 SAE jest niższe to ten instance pursuit ma lepszą stratę, oczywiście wyższe l0 per token
+ale i tak dalej per instancja l0 jest mniejsze
