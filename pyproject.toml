@@ -10,6 +10,7 @@ dependencies = [
     "matplotlib>=3.10.6",
     "nbformat>=5.10.4",
     "pandas>=2.3.2",
+    "sae-bench>=0.4.1",
     "sae-dashboard>=0.7.2",
     "sae-lens>=6.11.0",
     "scikit-learn>=1.7.1",

@@ -97,3 +97,22 @@ ale za to per cały tekst u nas jest znacznie lepiej
 
 Co zabawniej to jak l0 SAE jest niższe to ten instance pursuit ma lepszą stratę, oczywiście wyższe l0 per token
 ale i tak dalej per instancja l0 jest mniejsze
+
+
+
+* SAEBench
+:PROPERTIES:
+:CREATED:  <2025-10-13 Mon> [22:55]
+:END:
+
+Ten notebook w repo można wykorzystać z customowymi SAE
+
+Notebook odpala ich ewaluację i można go użyć do porównania paru modeli
+
+** SAEBench - integracja
+:PROPERTIES:
+:CREATED:  <2025-10-15 Wed> [00:09]
+:END:
+
+Dodałem InstanceHardThresholdingSAE (nazwa może nie do końca fortunna)
+i wyciągnąłem moduły do dopasowywania modelu liniowego i thresholdingu
