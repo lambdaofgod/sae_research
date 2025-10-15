@@ -58,7 +58,7 @@ class InstanceSparseCodingSAE:
 
             # Solve least squares on the support
             coeffs = self.instance_lstsq(self.W_dec, x_instance, support)
-            coeffs = self.thresholding(coeffs, self.k.item())
+            coeffs = self.thresholding(coeffs)
 
             encoded_acts[i] = coeffs
 

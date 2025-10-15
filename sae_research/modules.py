@@ -46,10 +46,11 @@ class HardThresholding(nn.Module):
     along the feature dimension.
     """
 
-    def __init__(self):
+    def __init__(self, k: int):
+        self.register_buffer("k", torch.tensor(k, dtype=torch.int, device=device))
         super().__init__()
 
-    def forward(self, feature_acts: torch.Tensor, k: int) -> torch.Tensor:
+    def forward(self, feature_acts: torch.Tensor) -> torch.Tensor:
         """
         Zero out all but top-k features per position.
 
@@ -62,7 +63,7 @@ class HardThresholding(nn.Module):
         """
         # Take top-k features per position along the d_sae dimension
         # This gives (seq_len, k)
-        top_indices = torch.topk(feature_acts.abs(), k, dim=-1).indices
+        top_indices = torch.topk(feature_acts.abs(), self.k.item(), dim=-1).indices
 
         thresholded_feature_acts = torch.scatter(
             torch.zeros_like(feature_acts),
