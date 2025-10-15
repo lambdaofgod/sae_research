@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 
-class InstanceHardThresholding(nn.Module):
+class HardThresholdingSupportSelector(nn.Module):
     """
     Compute support set via instance-level hard thresholding.
 
@@ -21,14 +21,14 @@ class InstanceHardThresholding(nn.Module):
         Find support indices by taking top-k per position, then union.
 
         Args:
-            feature_acts: Feature activations of shape (seq_len, d_sae) or (d_sae,)
+            feature_acts: Feature activations of shape (seq_len, d_sae)
             k: Number of features to select per position
 
         Returns:
             support: Indices of selected features (1D tensor)
         """
-        # Take top-k features per position along the d_sae dimension (last dim)
-        # This gives (seq_len, k) or just (k,) for 1D input
+        # Take top-k features per position along the d_sae dimension
+        # This gives (seq_len, k)
         top_indices = torch.topk(feature_acts.abs(), k, dim=-1).indices
 
         # Flatten and get unique feature indices
@@ -38,12 +38,47 @@ class InstanceHardThresholding(nn.Module):
         return support
 
 
+class HardThresholding(nn.Module):
+    """
+    Apply hard thresholding by keeping only top-k values per position.
+
+    Zeros out all values except the top-k (by absolute value) per position
+    along the feature dimension.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, feature_acts: torch.Tensor, k: int) -> torch.Tensor:
+        """
+        Zero out all but top-k features per position.
+
+        Args:
+            feature_acts: Feature activations of shape (seq_len, d_sae)
+            k: Number of features to keep per position
+
+        Returns:
+            Thresholded activations of shape (seq_len, d_sae)
+        """
+        # Take top-k features per position along the d_sae dimension
+        # This gives (seq_len, k)
+        top_indices = torch.topk(feature_acts.abs(), k, dim=-1).indices
+
+        thresholded_feature_acts = torch.scatter(
+            torch.zeros_like(feature_acts),
+            -1,
+            top_indices,
+            feature_acts.gather(-1, top_indices),
+        )
+        return thresholded_feature_acts
+
+
 class SparseLeastSquares(nn.Module):
     """
     Solve sparse least squares on a given support set.
 
-    Given dictionary A (d_sae, d_in), targets Y (seq_len, d_in), and support indices,
-    solves: A[support].T @ x = Y for x, returning sparse coefficients.
+    Fits a linear model using only the features specified by the support indices,
+    solving min ||dictionary[support].T @ x - targets||^2 for x.
     """
 
     def __init__(self):
@@ -57,31 +92,28 @@ class SparseLeastSquares(nn.Module):
 
         Args:
             dictionary: Dictionary matrix of shape (d_sae, d_in)
-            targets: Target activations of shape (seq_len, d_in) or (d_in,)
+            targets: Target activations of shape (seq_len, d_in)
             support: Indices of active features (1D tensor)
 
         Returns:
-            x: Sparse coefficients of shape (seq_len, d_sae) or (d_sae,)
+            x: Sparse coefficients of shape (seq_len, d_sae)
         """
-        # Handle both single vector and sequence cases
-        is_single = targets.dim() == 1
-        if is_single:
-            targets = targets.unsqueeze(0)
-
         # Select only the active dictionary elements
         A_in = dictionary[support].float().T  # (d_in, len(support))
         Y_in = targets.float().T  # (d_in, seq_len)
 
         # Solve least squares
-        coefficients = torch.linalg.lstsq(A_in, Y_in).solution.T  # (seq_len, len(support))
+        coefficients = torch.linalg.lstsq(
+            A_in, Y_in
+        ).solution.T  # (seq_len, len(support))
 
         # Create sparse output
         x = torch.zeros(
-            targets.shape[0], dictionary.shape[0], device=targets.device, dtype=targets.dtype
+            targets.shape[0],
+            dictionary.shape[0],
+            device=targets.device,
+            dtype=targets.dtype,
         )
         x[:, support] = coefficients.to(targets.dtype)
-
-        if is_single:
-            x = x.squeeze(0)
 
         return x
