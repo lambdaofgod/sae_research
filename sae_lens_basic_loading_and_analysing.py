@@ -179,15 +179,7 @@ sae = SAE.from_pretrained(
     device=device,
 )
 
-# Load instance hard thresholding pursuit SAE with same weights
-ihtp_sae = load_from_sae_lens(
-    model_name="gemma-2-2b",
-    release=sae_config["release"],
-    sae_id=sae_config["sae_id"],
-    k=100,  # per-position top-k
-    hook_layer=19,
-    device=device,
-)
+
 
 import numpy as np
 import sklearn
@@ -332,9 +324,6 @@ print(
     )
 )
 
-
-
-
 # %%time
 with torch.no_grad():
     # activation store can give us tokens.
@@ -422,65 +411,14 @@ def instance_thresholding_support(W_dec, y, topk):
 
 # -
 
-W_dec.device
-
-A = torch.eye(5)
-
-torch.topk(A, 2).indices[:,-1]
-
-
-
-A = W_dec
-Y = sae_out[0]
-
-torch.linalg.norm(sparse_lstsq(A, Y - b_dec, 10) + b_dec - sae_out[0], ord="fro")
-
-x_candidate = feature_acts[0,2]
-indices = x_candidate.nonzero().flatten()
-
-torch.topk((sae_out @ W_dec.T).abs(), )
-
-instance_thresholding_support(W_dec, sae_out, 10)
-
-
-# +
-# Removed standalone test call for instance_thresholding_pursuit
-# +
-#torch.linalg.lstsq(W_dec[indices], torch.topk(sae_out[0,2], 10).values.unsqueeze(0))
-# -
-
-sae_out[0,1].unsqueeze(0).shape
-
-W_dec[indices].unsqueeze(0).shape
-
-sae_out[0,2] - b_dec
-
-??sae.decode
-
-indices
-
-W_dec[indices,:].shape
-
-sae_out[0,1]
-
-# +
-#iterative_hard_thresholding(sae.W_dec, sae_out, 100).shape
-# -
-
-W_dec.shape
-
-
-
-batch_tokens.shape
-
-
-def get_topk_by_abs(X, dim):
-    return torch.topk
-
-
-??sae.decode
-
-??sae.encode
+ihtp_sae = load_from_sae_lens(
+    model_name="gemma-2-2b",
+    release=sae_config["release"],
+    sae_id=sae_config["sae_id"],
+    k=10,  # per-position top-k
+    hook_layer=19,
+    device=device,
+).half()
 
 
 # +
