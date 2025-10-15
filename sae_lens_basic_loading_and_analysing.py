@@ -167,6 +167,8 @@ get_hf_token()
 from datasets import load_dataset
 from transformer_lens import HookedTransformer
 from sae_lens import SAE
+from sae_research.instance_hard_thresholding_sae import load_from_sae_lens
+
 model = HookedTransformer.from_pretrained("gemma-2-2b", device=device, dtype=torch.float16)
 
 # the cfg dict is returned alongside the SAE since it may contain useful information for analysing the SAE (eg: instantiating an activation store)
@@ -174,6 +176,16 @@ model = HookedTransformer.from_pretrained("gemma-2-2b", device=device, dtype=tor
 # We also return the feature sparsities which are stored in HF for convenience.
 sae = SAE.from_pretrained(
     **sae_config,
+    device=device,
+)
+
+# Load instance hard thresholding pursuit SAE with same weights
+ihtp_sae = load_from_sae_lens(
+    model_name="gemma-2-2b",
+    release=sae_config["release"],
+    sae_id=sae_config["sae_id"],
+    k=100,  # per-position top-k
+    hook_layer=19,
     device=device,
 )
 
@@ -408,17 +420,6 @@ def instance_thresholding_support(W_dec, y, topk):
     return torch.topk((y @ W_dec.T).abs(), topk).indices[:,-1].unique()
 
 
-def instance_thresholding_pursuit(acts, W_dec, topk):
-    x = torch.zeros(*acts.shape[:2], W_dec.shape[0]).to(acts.device).half()
-    for i in range(acts.shape[0]):
-        Y = acts[i]
-        support = instance_thresholding_support(W_dec, acts, topk)
-        coeffs = sparse_lstq(W_dec, Y, support)
-
-        x[i] = coeffs
-    return x
-
-
 # -
 
 W_dec.device
@@ -442,21 +443,8 @@ torch.topk((sae_out @ W_dec.T).abs(), )
 instance_thresholding_support(W_dec, sae_out, 10)
 
 
-def instance_thresholding_pursuit(acts, W_dec, topk):
-    x = torch.zeros(*acts.shape[:2], W_dec.shape[0]).to(acts.device).half()
-    for i in range(acts.shape[0]):
-        Y = acts[i]
-        support = instance_thresholding_support(W_dec, acts, topk)
-        coeffs = sparse_lstq(W_dec, Y, support)
-
-        x[i] = coeffs
-    return x
-
-
 # +
-
-print_l0(instance_thresholding_pursuit(sae_out, W_dec, 10))
-
+# Removed standalone test call for instance_thresholding_pursuit
 # +
 #torch.linalg.lstsq(W_dec[indices], torch.topk(sae_out[0,2], 10).values.unsqueeze(0))
 # -
@@ -539,11 +527,11 @@ def instance_hard_thresholding_hook(activation, hook):
     return x @ W_dec + b_dec
 
 
-def instance_thresholding_pursuit_hook(activation, hook):
-    x = instance_thresholding_pursuit(activation - b_dec, W_dec, 3)
-    print("pursuit nonzero")
+def ihtp_hook(activation, hook):
+    x = ihtp_sae.encode(activation)
+    print("ihtp nonzero")
     print_l0(x)
-    return x @ W_dec + b_dec
+    return ihtp_sae.decode(x)
 
 
 # -
@@ -587,11 +575,11 @@ print(
 )
 print("###")
 print(
-    "reconstr_instance_thresholding_pursuit",
+    "reconstr_ihtp",
     model.run_with_hooks(
         batch_tokens,
         return_type="loss",
-        fwd_hooks=[(sae.cfg.metadata.hook_name, instance_thresholding_pursuit_hook)],
+        fwd_hooks=[(sae.cfg.metadata.hook_name, ihtp_hook)],
     ).item(),
 )
 print("###")
