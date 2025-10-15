@@ -1,7 +1,10 @@
+import json
 import torch
 import torch.nn as nn
+from typing import Union
 
 import sae_bench.custom_saes.base_sae as base_sae
+from huggingface_hub import hf_hub_download
 from sae_research.modules import (
     HardThresholdingSupportSelector,
     HardThresholding,
@@ -212,4 +215,135 @@ def load_from_sae_lens(
     sae.W_dec.data = sae_lens_sae.W_dec.to(device)
     sae.b_dec.data = sae_lens_sae.b_dec.to(device)
     sae.b_enc.data = sae_lens_sae.b_enc.to(device)
+    return sae
+
+
+def load_dictionary_learning_instance_sae(
+    repo_id: str,
+    filename: str,
+    model_name: str,
+    device: torch.device,
+    dtype: torch.dtype,
+    layer: int | None = None,
+    local_dir: str = "downloaded_saes",
+) -> Union[InstanceHardThresholdingPursuitSAE, MPSAE]:
+    """
+    Load an instance SAE (IHTP or MPSAE) from HuggingFace hub.
+
+    This function is analogous to load_dictionary_learning_batch_topk_sae
+    but handles instance-level SAE architectures.
+    """
+    assert "ae.pt" in filename
+
+    # Download the model parameters
+    path_to_params = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        force_download=False,
+        local_dir=local_dir,
+    )
+
+    pt_params = torch.load(path_to_params, map_location=torch.device("cpu"))
+
+    # Download the config
+    config_filename = filename.replace("ae.pt", "config.json")
+    path_to_config = hf_hub_download(
+        repo_id=repo_id,
+        filename=config_filename,
+        force_download=False,
+        local_dir=local_dir,
+    )
+
+    with open(path_to_config) as f:
+        config = json.load(f)
+
+    # Validate/extract layer
+    if layer is not None:
+        assert layer == config["trainer"]["layer"]
+    else:
+        layer = config["trainer"]["layer"]
+
+    # Validate model name
+    assert model_name in config["trainer"]["lm_name"]
+
+    # Determine SAE type from trainer class and get appropriate parameter
+    trainer_class = config["trainer"]["trainer_class"]
+
+    # Print original keys for debugging
+    print("Original keys in state_dict:", pt_params.keys())
+
+    # Map old keys to new keys
+    key_mapping = {
+        "encoder.weight": "W_enc",
+        "decoder.weight": "W_dec",
+        "encoder.bias": "b_enc",
+        "bias": "b_dec",
+    }
+
+    # Create a new dictionary with renamed keys
+    renamed_params = {key_mapping.get(k, k): v for k, v in pt_params.items()}
+
+    # Transpose weight matrices (due to nn.Linear convention)
+    renamed_params["W_enc"] = renamed_params["W_enc"].T
+    renamed_params["W_dec"] = renamed_params["W_dec"].T
+
+    # Print renamed keys for debugging
+    print("Renamed keys in state_dict:", renamed_params.keys())
+
+    # Create appropriate SAE instance based on trainer class
+    d_in = renamed_params["b_dec"].shape[0]
+    d_sae = renamed_params["b_enc"].shape[0]
+
+    if trainer_class == "InstanceHardThresholdingPursuitTrainer":
+        # IHTP SAE uses k parameter
+        k = config["trainer"]["k"]
+        sae = InstanceHardThresholdingPursuitSAE(
+            d_in=d_in,
+            d_sae=d_sae,
+            k=k,
+            model_name=model_name,
+            hook_layer=layer,  # type: ignore
+            device=device,
+            dtype=dtype,
+        )
+        # Add k to renamed_params if it's in the config but not the state dict
+        if "k" not in renamed_params and "k" in config["trainer"]:
+            renamed_params["k"] = torch.tensor(k, dtype=torch.int, device=device)
+        sae.cfg.architecture = "instance_hard_thresholding_pursuit"
+
+    elif trainer_class == "MPSAETrainer":
+        # MPSAE uses s parameter (number of matching pursuit steps)
+        s = config["trainer"]["s"]
+        sae = MPSAE(
+            d_in=d_in,
+            d_sae=d_sae,
+            s=s,
+            model_name=model_name,
+            hook_layer=layer,  # type: ignore
+            device=device,
+            dtype=dtype,
+        )
+        # Add S to renamed_params if it's in the config but not the state dict
+        if "S" not in renamed_params and "s" in config["trainer"]:
+            renamed_params["S"] = torch.tensor(s, dtype=torch.int, device=device)
+        sae.cfg.architecture = "mp_sae"
+
+    else:
+        raise ValueError(f"Unknown trainer class: {trainer_class}")
+
+    # Load the state dict
+    sae.load_state_dict(renamed_params, strict=False)  # type: ignore
+
+    # Move to specified device and dtype
+    sae.to(device=device, dtype=dtype)
+
+    # Validate dimensions
+    d_sae_actual, d_in_actual = sae.W_dec.data.shape
+    assert d_sae_actual >= d_in_actual, f"d_sae ({d_sae_actual}) should be >= d_in ({d_in_actual})"
+
+    # Check decoder normalization
+    normalized = sae.check_decoder_norms()
+    if not normalized:
+        raise ValueError("Decoder vectors are not normalized. Please normalize them")
+
     return sae
