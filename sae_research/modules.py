@@ -46,7 +46,7 @@ class HardThresholding(nn.Module):
     along the feature dimension.
     """
 
-    def __init__(self, k: int):
+    def __init__(self, k: int, device: str):
         self.register_buffer("k", torch.tensor(k, dtype=torch.int, device=device))
         super().__init__()
 
