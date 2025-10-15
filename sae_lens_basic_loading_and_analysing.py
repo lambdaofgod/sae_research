@@ -167,7 +167,7 @@ get_hf_token()
 from datasets import load_dataset
 from transformer_lens import HookedTransformer
 from sae_lens import SAE
-from sae_research.instance_hard_thresholding_sae import load_from_sae_lens
+from sae_research.instance_sae import load_from_sae_lens
 
 model = HookedTransformer.from_pretrained("gemma-2-2b", device=device, dtype=torch.float16)
 

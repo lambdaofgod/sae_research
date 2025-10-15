@@ -2,7 +2,11 @@ import torch
 import torch.nn as nn
 
 import sae_bench.custom_saes.base_sae as base_sae
-from sae_research.modules import InstanceHardThresholding, SparseLeastSquares
+from sae_research.modules import (
+    HardThresholdingSupportSelector,
+    HardThresholding,
+    SparseLeastSquares,
+)
 from abc import ABC, abstractmethod
 
 
@@ -91,8 +95,8 @@ class InstanceHardThresholdingPursuitSAE(InstanceSparseCodingSAE, base_sae.BaseS
         self.register_buffer("k", torch.tensor(k, dtype=torch.int, device=device))
 
         # Instantiate reusable modules
-        self.hard_thresholding = InstanceHardThresholding()
-        self.sparse_lstsq = SparseLeastSquares()
+        self.instance_support_selector = HardThresholdingSupportSelector()
+        self.instance_lstsq = SparseLeastSquares()
         self.thresholding = nn.Identity()
 
 
