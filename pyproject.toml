@@ -1,5 +1,9 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "sae-project"
+name = "sae-research"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -10,9 +14,8 @@ dependencies = [
     "matplotlib>=3.10.6",
     "nbformat>=5.10.4",
     "pandas>=2.3.2",
-    "sae-bench>=0.4.1",
-    "sae-dashboard>=0.7.2",
-    "sae-lens>=6.11.0",
+    "sae-bench==0.4.2",
+    "sae-lens==5.4.0",
     "scikit-learn>=1.7.1",
     "seaborn>=0.13.2",
     "trackio==0.5.0",
@@ -23,3 +26,6 @@ dependencies = [
 dev = [
     "ipykernel>=6.30.1",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["sae_research"]

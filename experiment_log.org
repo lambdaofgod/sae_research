@@ -116,3 +116,13 @@ Notebook odpala ich ewaluację i można go użyć do porównania paru modeli
 
 Dodałem InstanceHardThresholdingSAE (nazwa może nie do końca fortunna)
 i wyciągnąłem moduły do dopasowywania modelu liniowego i thresholdingu
+
+** Metryki
+
+SAEBench ma swietna strone na Neuronpedii
+
+https://www.neuronpedia.org/sae-bench/info
+
+** SAEBench demo
+
+Odpalilem MPSAE i IHTPSAE w SAEBench - dzialaja i jedyny problem jest na koncu ze sparse probe (ale ten blad juz w sumie wychodzil tez bez tych SAE)

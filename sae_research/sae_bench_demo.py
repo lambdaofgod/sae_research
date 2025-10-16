@@ -5,16 +5,16 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.17.2
+#       jupytext_version: 1.17.3
 #   kernelspec:
-#     display_name: base
+#     display_name: sae_research
 #     language: python
-#     name: python3
+#     name: sae_research
 # ---
 
 # %%
-# %load_ext autoreload
-# %autoreload 2
+# #%load_ext autoreload
+# #%autoreload 2
 
 # %%
 import os
@@ -23,6 +23,8 @@ import torch
 
 import sae_bench.custom_saes.custom_sae_config as custom_sae_config
 import sae_bench.custom_saes.relu_sae as relu_sae
+import sae_bench.custom_saes.relu_sae as topk_sae
+
 import sae_bench.custom_saes.run_all_evals_custom_saes as run_all_evals_custom_saes
 import sae_bench.evals.core.main as core
 import sae_bench.evals.sparse_probing.main as sparse_probing
@@ -76,10 +78,6 @@ str_dtype = torch_dtype.__str__().split(".")[-1]
 # This will require at least 100GB of disk space
 save_activations = False
 
-# %% [markdown]
-# This cell loads your custom SAEs. If you just want to use existing SAE Lens SAEs, comment it out.
-#
-
 # %%
 repo_id = "canrager/lm_sae"
 baseline_filename = (
@@ -88,9 +86,47 @@ baseline_filename = (
 hook_layer = 4
 hook_name = f"blocks.{hook_layer}.hook_resid_post"
 
+
+# %% [markdown]
+# This cell loads your custom SAEs. If you just want to use existing SAE Lens SAEs, comment it out.
+#
+
+# %%
+# The following contains our current defined SAE types and the shapes to plot for each. Add your custom SAE as new_sae_key
+new_sae_key = "vanilla"
+trainer_markers = {
+    "standard": "o",
+    "jumprelu": "X",
+    "topk": "^",
+    "p_anneal": "*",
+    "gated": "d",
+    new_sae_key: "s",  # New SAE
+    "ihtp": "p",  # pentagon for IHTP
+    "mpsae": "D",  # diamond for MPSAE
+}
+
+trainer_colors = {
+    "standard": "blue",
+    "jumprelu": "orange",
+    "topk": "green",
+    "p_anneal": "red",
+    "gated": "purple",
+    new_sae_key: "black",  # New SAE
+    "ihtp": "cyan",
+    "mpsae": "magenta",
+}
+
+
+# %%
+
+# %%
+
 sae = relu_sae.load_dictionary_learning_relu_sae(
     repo_id, baseline_filename, model_name, device, torch_dtype, layer=hook_layer
 )
+
+# %%
+
 
 print(f"sae dtype: {sae.dtype}, device: {sae.device}")
 
@@ -161,32 +197,9 @@ sae.cfg = custom_sae_config.CustomSAEConfig(
 sae.cfg.dtype = str_dtype
 
 
-# The following contains our current defined SAE types and the shapes to plot for each. Add your custom SAE as new_sae_key
-new_sae_key = "vanilla"
-trainer_markers = {
-    "standard": "o",
-    "jumprelu": "X",
-    "topk": "^",
-    "p_anneal": "*",
-    "gated": "d",
-    new_sae_key: "s",  # New SAE
-    "ihtp": "p",  # pentagon for IHTP
-    "mpsae": "D",  # diamond for MPSAE
-}
-
-trainer_colors = {
-    "standard": "blue",
-    "jumprelu": "orange",
-    "topk": "green",
-    "p_anneal": "red",
-    "gated": "purple",
-    new_sae_key: "black",  # New SAE
-    "ihtp": "cyan",
-    "mpsae": "magenta",
-}
-
 sae.cfg.architecture = new_sae_key
 sae.cfg.training_tokens = 200_000_000
+
 
 # Configure IHTP SAEs
 for sae_obj in [ihtp_sae_k5, ihtp_sae_k10]:
@@ -300,7 +313,10 @@ if not os.path.exists(image_path):
     os.makedirs(image_path)
 
 # %%
-results_folders = ["./eval_results"]
+# !pwd
+
+# %%
+results_folders = ["../eval_results"]
 
 eval_type = "sparse_probing"
 
@@ -412,7 +428,9 @@ for eval_type in eval_types:
         core_filenames,
         eval_type,
         image_base_name,
-        k=10,
+        k=100,
         trainer_markers=trainer_markers,
         trainer_colors=trainer_colors,
     )
+
+# %%
