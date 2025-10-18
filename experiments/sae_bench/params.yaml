@@ -10,6 +10,22 @@ model:
   torch_dtype: "bfloat16"
   device: "cuda"  # or "cpu"
 
+# GPU Assignment for Multi-GPU Parallelization
+# Maps DVC stages to specific GPUs
+# For single GPU: all stages use gpu_id: 0
+# For multi-GPU: assign different stages to different GPUs and run `dvc repro -j N`
+gpu_assignment:
+  sparse_probing_eval: 0
+  scr_eval: 0
+  tpp_eval: 0
+  absorption_eval: 0
+  unlearning_eval: 0
+  # Example multi-GPU setup (uncomment when you have multiple GPUs):
+  # core_eval: 0
+  # sparse_probing_eval: 1
+  # scr_eval: 2
+  # tpp_eval: 3
+
 # Baseline SAE configuration
 # This loads ONE specific SAE directly from HuggingFace
 # Used as the base for creating custom variants (IHTP, MPSAE)
@@ -28,7 +44,7 @@ sae_variants:
   # Matching Pursuit SAE
   mpsae:
     enabled: true
-    s_values: [50, 100]  # Sparsity levels for MPSAE
+    s_values: [50, 100, 250]  # Sparsity levels for MPSAE
 
 # Baseline comparison SAEs from SAE Bench
 comparison_saes:

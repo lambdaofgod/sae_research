@@ -95,12 +95,13 @@ def run_sparse_probing_evaluation(selected_saes, params, device, output_dir: str
     return results
 
 
-def main(saes_dir: str, output_dir: str):
+def main(saes_dir: str, output_dir: str, gpu_id: int = None):
     """Run sparse probing evaluation on SAEs
 
     Args:
         saes_dir: Directory containing SAE weights
         output_dir: Directory to save evaluation results
+        gpu_id: GPU ID to use (if None, reads from params.yaml or uses default)
     """
     # Load parameters
     params = load_params()
@@ -109,6 +110,13 @@ def main(saes_dir: str, output_dir: str):
     if not params['eval_types']['sparse_probing']:
         print("Sparse probing evaluation is disabled in params.yaml")
         sys.exit(0)
+
+    # Setup GPU
+    if gpu_id is None:
+        gpu_id = params.get('gpu_assignment', {}).get('sparse_probing_eval', 0)
+
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+    print(f"Using GPU {gpu_id} for sparse_probing (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']})")
 
     # Setup device
     device = general_utils.setup_environment()

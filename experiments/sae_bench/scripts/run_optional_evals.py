@@ -62,7 +62,7 @@ def load_saes(saes_dir: str):
 # Removed get_enabled_eval_types - no longer needed since we run one eval type at a time
 
 
-def run_optional_evaluations(selected_saes, params, device, eval_types, output_dirs):
+def run_optional_evaluations(selected_saes, params, device, eval_types):
     """Run optional evaluations on selected SAEs
 
     Args:
@@ -70,7 +70,6 @@ def run_optional_evaluations(selected_saes, params, device, eval_types, output_d
         params: Loaded parameters
         device: CUDA device
         eval_types: List of enabled eval types
-        output_dirs: Dict mapping eval_type -> output_dir
     """
     print("\n=== Running Optional Evaluations ===")
     print(f"Enabled evaluations: {eval_types}")
@@ -93,34 +92,20 @@ def run_optional_evaluations(selected_saes, params, device, eval_types, output_d
     print(f"  Batch size: {llm_batch_size}")
     print(f"  Save activations: {save_activations}")
 
-    # Temporarily override output folders for SAE Bench
-    # This is necessary because run_all_evals_custom_saes expects specific folder names
-    old_cwd = os.getcwd()
-    try:
-        # Create symlinks or set up environment for SAE Bench to find outputs
-        for eval_type in eval_types:
-            output_dir = output_dirs[eval_type]
-            os.makedirs(output_dir, exist_ok=True)
-
-        results = run_all_evals_custom_saes.run_evals(
-            model_name,
-            selected_saes,
-            llm_batch_size,
-            str_dtype,
-            device,
-            eval_types,
-            api_key=None,
-            force_rerun=False,
-            save_activations=save_activations,
-        )
-    finally:
-        os.chdir(old_cwd)
+    results = run_all_evals_custom_saes.run_evals(
+        model_name,
+        selected_saes,
+        llm_batch_size,
+        str_dtype,
+        device,
+        eval_types,
+        api_key=None,
+        force_rerun=False,
+        save_activations=save_activations,
+    )
 
     print(f"\n=== Optional Evaluations Complete ===")
-
-    for eval_type in eval_types:
-        output_dir = output_dirs[eval_type]
-        print(f"  {eval_type} results saved to: {output_dir}")
+    print(f"Results saved to eval_results/ (hardcoded by sae_bench)")
 
     return results
 
@@ -128,14 +113,14 @@ def run_optional_evaluations(selected_saes, params, device, eval_types, output_d
 def main(
     eval_type: str,
     saes_dir: str,
-    output_dir: str
+    gpu_id: int = None
 ):
     """Run a single optional evaluation type on SAEs
 
     Args:
         eval_type: Evaluation type to run (one of: 'scr', 'tpp', 'absorption', 'unlearning')
         saes_dir: Directory containing SAE weights
-        output_dir: Directory for this evaluation's results
+        gpu_id: GPU ID to use (if None, reads from params.yaml or uses default)
     """
     # Load parameters
     params = load_params()
@@ -150,12 +135,18 @@ def main(
     eval_enabled = params['eval_types'].get(eval_type, False)
     if not eval_enabled:
         print(f"{eval_type} evaluation is disabled in params.yaml")
+        output_dir = f"eval_results/{eval_type}"
         print(f"Creating empty output directory: {output_dir}")
         os.makedirs(output_dir, exist_ok=True)
         sys.exit(0)
 
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
+    # Setup GPU
+    if gpu_id is None:
+        stage_name = f"{eval_type}_eval"
+        gpu_id = params.get('gpu_assignment', {}).get(stage_name, 0)
+
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+    print(f"Using GPU {gpu_id} for {eval_type} (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']})")
 
     # Setup device
     from sae_bench.sae_bench_utils.general_utils import setup_environment
@@ -166,8 +157,7 @@ def main(
     selected_saes = load_saes(saes_dir)
 
     # Run this single evaluation type
-    output_dirs = {eval_type: output_dir}
-    run_optional_evaluations(selected_saes, params, device, [eval_type], output_dirs)
+    run_optional_evaluations(selected_saes, params, device, [eval_type])
 
     print("\n=== Done ===")
 

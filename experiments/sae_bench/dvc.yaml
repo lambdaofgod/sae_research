@@ -47,9 +47,13 @@ stages:
     outs:
       - results/sparse_probing
 
+  # NOTE: eval_results/* paths are HARDCODED by sae_bench library
+  # The library ignores any output_dir parameter and always writes to eval_results/
+  # All downstream stages (metrics, process_results, visualize) MUST use these paths
+
   # Stage 4a: SCR Evaluation
   scr_eval:
-    cmd: python scripts/run_optional_evals.py scr results/downloaded_saes results/scr
+    cmd: python scripts/run_optional_evals.py scr results/downloaded_saes
     deps:
       - scripts/run_optional_evals.py
       - results/downloaded_saes
@@ -58,12 +62,12 @@ stages:
       - eval_types.scr
       - activation_caching
     outs:
-      - results/scr:
+      - eval_results/scr:  # HARDCODED by sae_bench - cannot be changed
           persist: true
 
   # Stage 4b: TPP Evaluation
   tpp_eval:
-    cmd: python scripts/run_optional_evals.py tpp results/downloaded_saes results/tpp
+    cmd: python scripts/run_optional_evals.py tpp results/downloaded_saes
     deps:
       - scripts/run_optional_evals.py
       - results/downloaded_saes
@@ -72,12 +76,12 @@ stages:
       - eval_types.tpp
       - activation_caching
     outs:
-      - results/tpp:
+      - eval_results/tpp:  # HARDCODED by sae_bench - cannot be changed
           persist: true
 
   # Stage 4c: Absorption Evaluation
   absorption_eval:
-    cmd: python scripts/run_optional_evals.py absorption results/downloaded_saes results/absorption
+    cmd: python scripts/run_optional_evals.py absorption results/downloaded_saes
     deps:
       - scripts/run_optional_evals.py
       - results/downloaded_saes
@@ -86,12 +90,12 @@ stages:
       - eval_types.absorption
       - activation_caching
     outs:
-      - results/absorption:
+      - eval_results/absorption:  # HARDCODED by sae_bench - cannot be changed
           persist: true
 
   # Stage 4d: Unlearning Evaluation
   unlearning_eval:
-    cmd: python scripts/run_optional_evals.py unlearning results/downloaded_saes results/unlearning
+    cmd: python scripts/run_optional_evals.py unlearning results/downloaded_saes
     deps:
       - scripts/run_optional_evals.py
       - results/downloaded_saes
@@ -100,12 +104,13 @@ stages:
       - eval_types.unlearning
       - activation_caching
     outs:
-      - results/unlearning:
+      - eval_results/unlearning:  # HARDCODED by sae_bench - cannot be changed
           persist: true
 
   # Stage 5: Process Results - Merge core and eval-specific metrics
+  # NOTE: Uses eval_results/* for optional evals (hardcoded by sae_bench)
   process_results:
-    cmd: python scripts/process_results.py results/core results/sparse_probing results/absorption results/scr results/tpp results/merged
+    cmd: python scripts/process_results.py results/core results/sparse_probing eval_results/absorption eval_results/scr eval_results/tpp results/merged
     deps:
       - scripts/process_results.py
       - results/core
@@ -115,8 +120,9 @@ stages:
       - results/merged
 
   # Stage 6: Visualize - Generate comparison plots
+  # NOTE: Uses eval_results/* for optional evals (hardcoded by sae_bench)
   visualize:
-    cmd: python scripts/visualize_results.py results/core results/sparse_probing results/absorption results/scr results/tpp results/images
+    cmd: python scripts/visualize_results.py results/core results/sparse_probing eval_results/absorption eval_results/scr eval_results/tpp results/images
     deps:
       - scripts/visualize_results.py
       - results/core
@@ -129,6 +135,7 @@ stages:
 
   # === Metrics Extraction Stages ===
   # These stages extract metrics from evaluation results without re-running evaluations
+  # NOTE: Optional evals use eval_results/* (hardcoded by sae_bench library)
 
   # Extract metrics from core evaluation results
   core_metrics:
@@ -150,42 +157,42 @@ stages:
       - metrics/sparse_probing.json:
           cache: false
 
-  # Extract metrics from SCR results
+  # Extract metrics from SCR results (eval_results/scr hardcoded by sae_bench)
   scr_metrics:
-    cmd: python scripts/extract_metrics.py scr results/scr metrics/scr.json
+    cmd: python scripts/extract_metrics.py scr eval_results/scr metrics/scr.json
     deps:
       - scripts/extract_metrics.py
-      - results/scr
+      - eval_results/scr
     metrics:
       - metrics/scr.json:
           cache: false
 
-  # Extract metrics from TPP results
+  # Extract metrics from TPP results (eval_results/tpp hardcoded by sae_bench)
   tpp_metrics:
-    cmd: python scripts/extract_metrics.py tpp results/tpp metrics/tpp.json
+    cmd: python scripts/extract_metrics.py tpp eval_results/tpp metrics/tpp.json
     deps:
       - scripts/extract_metrics.py
-      - results/tpp
+      - eval_results/tpp
     metrics:
       - metrics/tpp.json:
           cache: false
 
-  # Extract metrics from absorption results
+  # Extract metrics from absorption results (eval_results/absorption hardcoded by sae_bench)
   absorption_metrics:
-    cmd: python scripts/extract_metrics.py absorption results/absorption metrics/absorption.json
+    cmd: python scripts/extract_metrics.py absorption eval_results/absorption metrics/absorption.json
     deps:
       - scripts/extract_metrics.py
-      - results/absorption
+      - eval_results/absorption
     metrics:
       - metrics/absorption.json:
           cache: false
 
-  # Extract metrics from unlearning results
+  # Extract metrics from unlearning results (eval_results/unlearning hardcoded by sae_bench)
   unlearning_metrics:
-    cmd: python scripts/extract_metrics.py unlearning results/unlearning metrics/unlearning.json
+    cmd: python scripts/extract_metrics.py unlearning eval_results/unlearning metrics/unlearning.json
     deps:
       - scripts/extract_metrics.py
-      - results/unlearning
+      - eval_results/unlearning
     metrics:
       - metrics/unlearning.json:
           cache: false

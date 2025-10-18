@@ -229,14 +229,22 @@ def save_saes(custom_saes, output_dir):
     print(f"Saved {len(custom_saes)} custom SAE(s)")
 
 
-def main(output_dir: str):
+def main(output_dir: str, gpu_id: int = None):
     """Setup SAEs and save to output directory
 
     Args:
         output_dir: Directory to save SAE weights and metadata
+        gpu_id: GPU ID to use (if None, reads from params.yaml or uses default)
     """
     # Load parameters
     params = load_params()
+
+    # Setup GPU
+    if gpu_id is None:
+        gpu_id = params.get('gpu_assignment', {}).get('setup', 0)
+
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+    print(f"Using GPU {gpu_id} for setup (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']})")
 
     # Setup environment
     device = setup_environment(params)
