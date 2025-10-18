@@ -1,8 +1,13 @@
 """
-Run Optional Evaluations: Absorption, SCR, TPP, Unlearning
+Run a Single Optional Evaluation: Absorption, SCR, TPP, or Unlearning
 
-Note: Output directories must be provided even if evaluation is disabled.
-Disabled evaluations will be skipped based on params.yaml settings.
+Usage:
+    python run_optional_evals.py <eval_type> <saes_dir> <output_dir>
+
+Where eval_type is one of: scr, tpp, absorption, unlearning
+
+The script checks params.yaml to see if the evaluation is enabled.
+If disabled, it creates an empty output directory and exits.
 """
 import os
 import sys
@@ -54,14 +59,7 @@ def load_saes(saes_dir: str):
     return selected_saes
 
 
-def get_enabled_eval_types(params):
-    """Get list of enabled optional evaluation types"""
-    optional_types = ['absorption', 'scr', 'tpp', 'unlearning', 'autointerp']
-    enabled = [
-        eval_type for eval_type in optional_types
-        if params['eval_types'].get(eval_type, False)
-    ]
-    return enabled
+# Removed get_enabled_eval_types - no longer needed since we run one eval type at a time
 
 
 def run_optional_evaluations(selected_saes, params, device, eval_types, output_dirs):
@@ -128,35 +126,36 @@ def run_optional_evaluations(selected_saes, params, device, eval_types, output_d
 
 
 def main(
+    eval_type: str,
     saes_dir: str,
-    absorption_dir: str,
-    scr_dir: str,
-    tpp_dir: str,
-    unlearning_dir: str
+    output_dir: str
 ):
-    """Run optional evaluations on SAEs
+    """Run a single optional evaluation type on SAEs
 
     Args:
+        eval_type: Evaluation type to run (one of: 'scr', 'tpp', 'absorption', 'unlearning')
         saes_dir: Directory containing SAE weights
-        absorption_dir: Directory for absorption eval results
-        scr_dir: Directory for SCR eval results
-        tpp_dir: Directory for TPP eval results
-        unlearning_dir: Directory for unlearning eval results
+        output_dir: Directory for this evaluation's results
     """
     # Load parameters
     params = load_params()
 
-    # Get enabled optional evaluation types
-    eval_types = get_enabled_eval_types(params)
+    # Validate eval_type
+    valid_eval_types = ['absorption', 'scr', 'tpp', 'unlearning']
+    if eval_type not in valid_eval_types:
+        print(f"Error: eval_type must be one of {valid_eval_types}, got: {eval_type}")
+        sys.exit(1)
 
-    # Create output directories even if evals are disabled (DVC expects them)
-    for output_dir in [absorption_dir, scr_dir, tpp_dir, unlearning_dir]:
+    # Check if this eval type is enabled in config
+    eval_enabled = params['eval_types'].get(eval_type, False)
+    if not eval_enabled:
+        print(f"{eval_type} evaluation is disabled in params.yaml")
+        print(f"Creating empty output directory: {output_dir}")
         os.makedirs(output_dir, exist_ok=True)
-
-    if not eval_types:
-        print("No optional evaluations enabled in params.yaml")
-        print("Created empty output directories for DVC")
         sys.exit(0)
+
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
 
     # Setup device
     from sae_bench.sae_bench_utils.general_utils import setup_environment
@@ -166,16 +165,9 @@ def main(
     # Load SAEs
     selected_saes = load_saes(saes_dir)
 
-    # Map eval types to output directories
-    output_dirs = {
-        'absorption': absorption_dir,
-        'scr': scr_dir,
-        'tpp': tpp_dir,
-        'unlearning': unlearning_dir,
-    }
-
-    # Run optional evaluations
-    run_optional_evaluations(selected_saes, params, device, eval_types, output_dirs)
+    # Run this single evaluation type
+    output_dirs = {eval_type: output_dir}
+    run_optional_evaluations(selected_saes, params, device, [eval_type], output_dirs)
 
     print("\n=== Done ===")
 

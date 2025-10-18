@@ -104,9 +104,21 @@ dvc repro
 # Run only setup
 dvc repro setup
 
+# Run a specific optional evaluation
+dvc repro scr_eval
+
+# Run all optional evaluations
+dvc repro scr_eval tpp_eval absorption_eval unlearning_eval
+
 # Run up to visualization
 dvc repro visualize
 ```
+
+**Benefits of split stages:**
+- Clear visibility: See exactly which evaluation is running
+- Granular control: Run only the evaluations you need
+- Better error handling: If one evaluation fails, others can continue
+- Progress tracking: Check `dvc.lock` to see which evaluations completed
 
 ### View pipeline DAG
 ```bash
@@ -170,9 +182,24 @@ python scripts/run_core_eval.py
 - Uses datasets like "LabHC/bias_in_bios_class_set1"
 - **Outputs**: `eval_results/sparse_probing/`
 
-### 4. Optional Evaluations (`optional_evals`)
-- Runs absorption, SCR, TPP, unlearning if enabled
-- **Outputs**: `eval_results/{absorption,scr,tpp,unlearning}/`
+### 4. Optional Evaluations (Split into Separate Stages)
+Each optional evaluation runs as an independent stage for better visibility:
+
+#### 4a. SCR Evaluation (`scr_eval`)
+- Spurious Correlation Removal evaluation
+- **Outputs**: `results/scr/`
+
+#### 4b. TPP Evaluation (`tpp_eval`)
+- Targeted Probe Perturbation evaluation
+- **Outputs**: `results/tpp/`
+
+#### 4c. Absorption Evaluation (`absorption_eval`)
+- Feature absorption detection
+- **Outputs**: `results/absorption/`
+
+#### 4d. Unlearning Evaluation (`unlearning_eval`)
+- Selective knowledge removal
+- **Outputs**: `results/unlearning/`
 
 ### 5. Process Results (`process_results`)
 - Merges core metrics with eval-specific metrics

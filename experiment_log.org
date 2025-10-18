@@ -126,3 +126,8 @@ https://www.neuronpedia.org/sae-bench/info
 ** SAEBench demo
 
 Odpalilem MPSAE i IHTPSAE w SAEBench - dzialaja i jedyny problem jest na koncu ze sparse probe (ale ten blad juz w sumie wychodzil tez bez tych SAE)
+
+** DVC
+:PROPERTIES:
+:CREATED:  <2025-10-18 sob> [13:46]
+:END:

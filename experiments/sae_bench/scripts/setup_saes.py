@@ -71,7 +71,7 @@ def configure_baseline_sae(sae, params, model_name, d_in, d_sae, hook_name, hook
     return sae
 
 
-def create_ihtp_variants(sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype):
+def create_ihtp_variants(sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype, release, hook_point, trainer):
     """Create IHTP SAE variants with different k values"""
     if not params['sae_variants']['ihtp']['enabled']:
         print("\nIHTP variants disabled, skipping...")
@@ -106,12 +106,12 @@ def create_ihtp_variants(sae, params, d_in, d_sae, model_name, hook_layer, devic
         ihtp_sae.cfg.architecture = "ihtp"
         ihtp_sae.cfg.training_tokens = params['baseline_sae']['training_tokens']
 
-        ihtp_saes.append((f"ihtp_k{k}_layer{hook_layer}", ihtp_sae))
+        ihtp_saes.append(ihtp_sae)
 
     return ihtp_saes
 
 
-def create_mpsae_variants(sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype):
+def create_mpsae_variants(sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype, release, hook_point, trainer):
     """Create MPSAE variants with different s values"""
     if not params['sae_variants']['mpsae']['enabled']:
         print("\nMPSAE variants disabled, skipping...")
@@ -146,9 +146,47 @@ def create_mpsae_variants(sae, params, d_in, d_sae, model_name, hook_layer, devi
         mpsae.cfg.architecture = "mpsae"
         mpsae.cfg.training_tokens = params['baseline_sae']['training_tokens']
 
-        mpsaes.append((f"mpsae_s{s}_layer{hook_layer}", mpsae))
+        mpsaes.append(mpsae)
 
     return mpsaes
+
+
+def parse_sae_filename(filename):
+    """Parse SAE filename to extract components for naming
+
+    Args:
+        filename: Path like "release/hook_point/trainer/ae.pt"
+
+    Returns:
+        Tuple of (release, hook_point, trainer)
+    """
+    parts = filename.split("/")
+    if len(parts) != 4:
+        raise ValueError(f"Expected 4 parts in filename, got {len(parts)}: {filename}")
+
+    return parts[0], parts[1], parts[2]
+
+
+def generate_sae_name(release, hook_point, trainer, variant=None, param=None):
+    """Generate uniform SAE name
+
+    Args:
+        release: Release directory (e.g., "gemma-2-2b_sweep_standard_ctx128_ef2_0824")
+        hook_point: Hook point (e.g., "resid_post_layer_19")
+        trainer: Trainer (e.g., "trainer_5")
+        variant: Optional variant type ("ihtp", "mpsae")
+        param: Optional variant parameter (e.g., "k5", "s50")
+
+    Returns:
+        Formatted name string
+    """
+    if variant and param:
+        # Replace "standard" with variant_param for IHTP/MPSAE
+        modified_release = release.replace("standard", f"{variant}_{param}")
+        return f"{modified_release}_{hook_point}_{trainer}"
+    else:
+        # Baseline SAE
+        return f"{release}_{hook_point}_{trainer}"
 
 
 def get_comparison_saes(params):
@@ -210,7 +248,10 @@ def main(output_dir: str):
     model_name = params['model']['name']
     hook_name = f"blocks.{hook_layer}.hook_resid_post"
     baseline_filename = params['baseline_sae']['filename']
-    unique_custom_sae_id = baseline_filename.replace("/", "_").replace(".", "_")
+
+    # Parse filename for uniform naming
+    release, hook_point, trainer = parse_sae_filename(baseline_filename)
+    baseline_sae_name = generate_sae_name(release, hook_point, trainer)
 
     sae = configure_baseline_sae(
         sae, params, model_name, d_in, d_sae, hook_name, hook_layer, str_dtype
@@ -218,18 +259,32 @@ def main(output_dir: str):
 
     # Create variant SAEs
     ihtp_saes = create_ihtp_variants(
-        sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype
+        sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype,
+        release, hook_point, trainer
     )
 
     mpsaes = create_mpsae_variants(
-        sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype
+        sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype,
+        release, hook_point, trainer
     )
 
     # Get comparison SAEs
     baseline_saes = get_comparison_saes(params)
 
-    # Collect all custom SAEs
-    custom_saes = [(unique_custom_sae_id, sae)] + ihtp_saes + mpsaes
+    # Collect all custom SAEs with names
+    custom_saes = [(baseline_sae_name, sae)]
+
+    # Add IHTP SAEs with generated names
+    for i, ihtp_sae in enumerate(ihtp_saes):
+        k = params['sae_variants']['ihtp']['k_values'][i]
+        name = generate_sae_name(release, hook_point, trainer, variant="ihtp", param=f"k{k}")
+        custom_saes.append((name, ihtp_sae))
+
+    # Add MPSAE SAEs with generated names
+    for i, mpsae in enumerate(mpsaes):
+        s = params['sae_variants']['mpsae']['s_values'][i]
+        name = generate_sae_name(release, hook_point, trainer, variant="mpsae", param=f"s{s}")
+        custom_saes.append((name, mpsae))
 
     # Save SAEs
     save_saes(custom_saes, output_dir)
