@@ -5,16 +5,18 @@ random_seed: 42
 
 # Model configuration
 model:
-  name: "pythia-70m-deduped"
-  llm_batch_size: 512
-  torch_dtype: "float32"
+  name: "gemma-2-2b"
+  llm_batch_size: 128
+  torch_dtype: "bfloat16"
   device: "cuda"  # or "cpu"
 
 # Baseline SAE configuration
+# This loads ONE specific SAE directly from HuggingFace
+# Used as the base for creating custom variants (IHTP, MPSAE)
 baseline_sae:
-  repo_id: "canrager/lm_sae"
-  filename: "pythia70m_sweep_standard_ctx128_0712/resid_post_layer_4/trainer_8/ae.pt"
-  hook_layer: 4
+  repo_id: "canrager/lm_sae"  # HuggingFace repository
+  filename: "gemma-2-2b_sweep_standard_ctx128_ef2_0824/resid_post_layer_19/trainer_5/ae.pt"  # Exact file path in repo
+  hook_layer: 19
   training_tokens: 200_000_000
 
 # SAE variant configurations
@@ -31,8 +33,8 @@ sae_variants:
 # Baseline comparison SAEs from SAE Bench
 comparison_saes:
   enabled: true
-  sae_regex_pattern: "(sae_bench_pythia70m_sweep_topk_ctx128_0730).*"
-  sae_block_pattern: ".*blocks\\.([4])\\.hook_resid_post__trainer_(8)$"
+  sae_regex_pattern: "(gemma-2-2b_sweep_topk_ctx128_ef2_0824).*"
+  sae_block_pattern: ".*blocks\\.([19])\\.hook_resid_post__trainer_(5)$"
 
 # Evaluation types to run
 eval_types:
@@ -48,7 +50,7 @@ eval_types:
 core_eval:
   n_eval_reconstruction_batches: 2000
   n_eval_sparsity_variance_batches: 2000
-  eval_batch_size_prompts: 64
+  eval_batch_size_prompts: 8
   compute_featurewise_density_statistics: true
   compute_featurewise_weight_based_metrics: true
   exclude_special_tokens_from_reconstruction: true
