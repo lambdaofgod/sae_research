@@ -1,0 +1,98 @@
+# SAE Bench Pipeline Configuration
+
+# Random seed for reproducibility
+random_seed: 42
+
+# Model configuration
+model:
+  name: "pythia-70m-deduped"
+  llm_batch_size: 512
+  torch_dtype: "float32"
+  device: "cuda"  # or "cpu"
+
+# Baseline SAE configuration
+baseline_sae:
+  repo_id: "canrager/lm_sae"
+  filename: "pythia70m_sweep_standard_ctx128_0712/resid_post_layer_4/trainer_8/ae.pt"
+  hook_layer: 4
+  training_tokens: 200_000_000
+
+# SAE variant configurations
+sae_variants:
+  # Instance Hard Thresholding Pursuit SAE
+  ihtp:
+    enabled: true
+    k_values: [5, 10]  # Top-k values for IHTP
+  # Matching Pursuit SAE
+  mpsae:
+    enabled: true
+    s_values: [50, 100]  # Sparsity levels for MPSAE
+
+# Baseline comparison SAEs from SAE Bench
+comparison_saes:
+  enabled: true
+  sae_regex_pattern: "(sae_bench_pythia70m_sweep_topk_ctx128_0730).*"
+  sae_block_pattern: ".*blocks\\.([4])\\.hook_resid_post__trainer_(8)$"
+
+# Evaluation types to run
+eval_types:
+  core: true
+  sparse_probing: true
+  absorption: false  # Not recommended for models < 2B parameters
+  scr: true
+  tpp: true
+  autointerp: false  # Must be run as script, not in notebook
+  unlearning: false  # Requires instruct-tuned model >= 2B params
+
+# Core evaluation settings
+core_eval:
+  n_eval_reconstruction_batches: 2000
+  n_eval_sparsity_variance_batches: 2000
+  eval_batch_size_prompts: 64
+  compute_featurewise_density_statistics: true
+  compute_featurewise_weight_based_metrics: true
+  exclude_special_tokens_from_reconstruction: true
+  dataset: "Skylion007/openwebtext"
+  context_size: 128
+
+# Sparse probing evaluation settings
+sparse_probing:
+  dataset_names:
+    - "LabHC/bias_in_bios_class_set1"
+  # Additional datasets can be added here:
+  # - "dataset_name_2"
+  # - "dataset_name_3"
+  sae_batch_size: 256
+
+# Activation caching settings
+# Set to true if evaluating multiple SAEs on the same layer
+# Requires at least 100GB of disk space
+activation_caching:
+  save_activations: false
+
+# Visualization settings
+visualization:
+  # Top-k value for accuracy metrics in plots
+  k: 1
+
+  # Marker shapes for different SAE architectures
+  trainer_markers:
+    standard: "o"
+    jumprelu: "X"
+    topk: "^"
+    p_anneal: "*"
+    gated: "d"
+    vanilla: "s"
+    ihtp: "p"  # pentagon for IHTP
+    mpsae: "D"  # diamond for MPSAE
+
+  # Colors for different training configurations
+  trainer_colors:
+    standard: "blue"
+    jumprelu: "orange"
+    topk: "green"
+    p_anneal: "red"
+    gated: "purple"
+    vanilla: "black"
+    ihtp: "cyan"
+    mpsae: "magenta"

@@ -1,0 +1,102 @@
+# SAE Bench DVC Pipeline
+# This pipeline evaluates SAE variants using the SAE Bench framework
+
+stages:
+  # Stage 1: Setup - Load baseline SAE and create custom variants
+  setup:
+    cmd: python scripts/setup_saes.py results/downloaded_saes
+    deps:
+      - scripts/setup_saes.py
+    params:
+      - model
+      - baseline_sae
+      - sae_variants
+      - comparison_saes
+      - random_seed
+    outs:
+      - results/downloaded_saes
+
+  # Stage 2: Core Evaluation - Basic reconstruction and sparsity metrics
+  core_eval:
+    cmd: python scripts/run_core_eval.py results/downloaded_saes results/core
+    deps:
+      - scripts/run_core_eval.py
+      - results/downloaded_saes
+    params:
+      - model
+      - core_eval
+      - eval_types.core
+    outs:
+      - results/core
+    # Only run if core evaluation is enabled
+    # Note: DVC doesn't support conditional stages directly,
+    # but the script checks eval_types.core and exits if disabled
+
+  # Stage 3: Sparse Probing Evaluation
+  sparse_probing_eval:
+    cmd: python scripts/run_sparse_probing.py results/downloaded_saes results/sparse_probing
+    deps:
+      - scripts/run_sparse_probing.py
+      - results/downloaded_saes
+    params:
+      - model
+      - sparse_probing
+      - eval_types.sparse_probing
+      - activation_caching
+      - random_seed
+    outs:
+      - results/sparse_probing
+
+  # Stage 4: Optional Evaluations (absorption, scr, tpp, unlearning)
+  optional_evals:
+    cmd: python scripts/run_optional_evals.py results/downloaded_saes results/absorption results/scr results/tpp results/unlearning
+    deps:
+      - scripts/run_optional_evals.py
+      - results/downloaded_saes
+    params:
+      - model
+      - eval_types.absorption
+      - eval_types.scr
+      - eval_types.tpp
+      - eval_types.unlearning
+      - eval_types.autointerp
+      - activation_caching
+    outs:
+      - results/absorption:
+          persist: true
+      - results/scr:
+          persist: true
+      - results/tpp:
+          persist: true
+      - results/unlearning:
+          persist: true
+    # Optional stage - only runs if any optional eval type is enabled
+
+  # Stage 5: Process Results - Merge core and eval-specific metrics
+  process_results:
+    cmd: python scripts/process_results.py results/core results/sparse_probing results/absorption results/scr results/tpp results/merged
+    deps:
+      - scripts/process_results.py
+      - results/core
+    params:
+      - eval_types
+    outs:
+      - results/merged
+
+  # Stage 6: Visualize - Generate comparison plots
+  visualize:
+    cmd: python scripts/visualize_results.py results/core results/sparse_probing results/absorption results/scr results/tpp results/images
+    deps:
+      - scripts/visualize_results.py
+      - results/core
+    params:
+      - eval_types
+      - visualization
+    outs:
+      - results/images:
+          persist: true
+
+# Pipeline metadata
+# Run with: dvc repro
+# View DAG: dvc dag
+# Run specific stage: dvc repro <stage_name>
