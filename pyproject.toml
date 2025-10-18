@@ -29,5 +29,8 @@ dev = [
     "ipykernel>=6.30.1",
 ]
 
+[project.scripts]
+find_sae_bench_models = "scripts.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["sae_research"]
