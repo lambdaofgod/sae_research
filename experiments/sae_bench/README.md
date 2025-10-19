@@ -281,7 +281,152 @@ pip install -e .
 - Pipeline design based on: `experiments/PIPELINES.md`
 - Original implementation: `sae_research/sae_bench_demo.py`
 
+## Metrics Tracking
+
+### Metrics Extraction Stages
+
+The pipeline includes dedicated stages for extracting metrics from evaluation results:
+
+- **`core_metrics`**: Extracts metrics from core evaluation
+- **`sparse_probing_metrics`**: Extracts metrics from sparse probing
+- **`scr_metrics`**: Extracts metrics from SCR evaluation
+- **`tpp_metrics`**: Extracts metrics from TPP evaluation
+- **`absorption_metrics`**: Extracts metrics from absorption evaluation
+- **`unlearning_metrics`**: Extracts metrics from unlearning evaluation
+- **`aggregate_metrics`**: Combines all metrics into a single file
+
+### Running Metrics Extraction
+
+```bash
+# Extract metrics without re-running evaluations
+uv run dvc repro core_metrics sparse_probing_metrics scr_metrics tpp_metrics
+
+# Or extract all metrics at once
+uv run dvc repro aggregate_metrics
+
+# Extract metrics for specific evaluation type
+uv run dvc repro core_metrics
+```
+
+### View Current Metrics
+
+```bash
+# Show all metrics from the latest run
+uv run dvc metrics show
+
+# Show metrics in JSON format
+uv run dvc metrics show --json
+
+# Show metrics from specific metric files
+uv run dvc metrics show metrics/core.json
+uv run dvc metrics show metrics/sparse_probing.json
+
+# Show aggregated metrics
+uv run dvc metrics show metrics/all_metrics.json
+```
+
+### Compare Metrics Across Experiments
+
+```bash
+# Compare metrics between workspace and a specific commit/tag
+uv run dvc metrics diff <commit-hash>
+
+# Compare metrics between two commits
+uv run dvc metrics diff <commit1> <commit2>
+```
+
+### Track Metrics Across Experiments
+
+```bash
+# Run an experiment
+uv run dvc exp run
+
+# View metrics from all experiments
+uv run dvc exp show
+
+# Compare specific experiments
+uv run dvc exp diff exp-1 exp-2
+```
+
+### Visualizing Metrics
+
+```bash
+# Generate plots for tracked metrics (if configured)
+uv run dvc plots show
+
+# Generate plots comparing experiments
+uv run dvc plots diff <commit1> <commit2>
+```
+
+### How Metrics Extraction Works
+
+1. Each evaluation stage produces JSON files in its output directory
+2. Metrics extraction stages run `scripts/extract_metrics.py` to parse evaluation results
+3. The extraction script:
+   - Reads all JSON files from the specified results directory
+   - Extracts key metrics based on the evaluation type
+   - Saves metrics to lightweight JSON files in the `metrics/` directory
+4. DVC tracks these metric files with `cache: false` to always read fresh values
+5. Metrics are tracked in Git alongside code changes
+
+### The Unified Extraction Script
+
+The `scripts/extract_metrics.py` script handles all metric extraction:
+
+```bash
+# Extract specific metric type
+python scripts/extract_metrics.py core results/core metrics/core.json
+
+# Aggregate multiple metric files
+python scripts/extract_metrics.py aggregate metrics/core.json metrics/sparse_probing.json metrics/all.json
+```
+
+Supported metric types: `core`, `sparse_probing`, `scr`, `tpp`, `absorption`, `unlearning`
+
+### Adding New Metrics
+
+To track additional metrics:
+
+1. Modify the appropriate extraction function in `scripts/extract_metrics.py`:
+   - For core metrics: Edit `extract_core_metrics()`
+   - For sparse probing: Edit `extract_sparse_probing_metrics()`
+   - For other types: Edit the corresponding function
+
+2. The extraction functions read from the `eval_result_metrics` field in the evaluation JSON files
+
+3. Re-run the metrics extraction stage:
+   ```bash
+   uv run dvc repro core_metrics  # or the appropriate metrics stage
+   ```
+
+4. The new metrics will automatically be tracked by DVC
+
+Example of adding a new metric to core extraction:
+```python
+def extract_core_metrics(data: Dict[str, Any]) -> Dict[str, Any]:
+    metrics = {}
+    result_metrics = data.get('eval_result_metrics', {})
+
+    # Add your new metric extraction
+    if 'your_metric_category' in result_metrics:
+        metrics['your_metric_name'] = result_metrics['your_metric_category'].get('your_metric_key')
+
+    return metrics
+```
+
+### Metrics Tracking Notes
+
+- Metrics extraction stages are independent of evaluation stages, allowing you to:
+  - Re-extract metrics without re-running evaluations
+  - Modify metric selection without touching evaluation code
+  - Add new metrics retroactively from existing results
+- Metrics files are not cached by DVC (due to `cache: false`), so they're always read fresh
+- Metrics are stored in lightweight JSON files, making them Git-friendly
+- Multiple SAE evaluations in the same directory will all be tracked
+- The aggregated metrics file (`metrics/all_metrics.json`) provides a unified view of all metrics
+
 ## See Also
 
+- `METRICS.md` - Tracked metrics definitions and latest evaluation results
 - `experiments/PIPELINES.md` - Detailed pipeline documentation
 - `sae_research/instance_sae.py` - Custom SAE implementations

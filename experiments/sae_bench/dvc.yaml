@@ -212,6 +212,20 @@ stages:
       - metrics/all_metrics.json:
           cache: false
 
+  # Generate METRICS.md report from template and aggregated metrics
+  generate_report:
+    cmd: python scripts/generate_report.py
+    deps:
+      - scripts/generate_report.py
+      - METRICS_TEMPLATE.md
+      - metrics/all_metrics.json
+    params:
+      - model
+      - baseline_sae
+    outs:
+      - METRICS.md:
+          persist: true
+
 # Pipeline metadata
 # Run with: dvc repro
 # View DAG: dvc dag
@@ -222,3 +236,4 @@ stages:
 #   Run all core evaluations: dvc repro core_eval sparse_probing_eval
 #   Run all optional evaluations: dvc repro scr_eval tpp_eval absorption_eval unlearning_eval
 #   Extract metrics only: dvc repro core_metrics sparse_probing_metrics scr_metrics tpp_metrics
+#   Generate report: dvc repro generate_report
