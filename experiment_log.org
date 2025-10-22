@@ -181,7 +181,16 @@ Wygląda na to że modele do SAEBench były trenowane przez skrypt w dictionary_
 
 Oryginalnie to jest używane z 500M tokenów ale w sumie mnie bardziej podoba się pomysł żeby używać 5M (a potem może 50M) żeby przyspiszyć eksperymenty
 
-** TODO Modele z pursuit/progowaniem
+** DONE Modele z pursuit/progowaniem
 :PROPERTIES:
 :CREATED:  <2025-10-20 pon> [23:19]
+:END:
+
+https://github.com/adamkarvonen/dictionary_learning_demo/compare/main...lambdaofgod:dictionary_learning_demo:main
+
+Dodane trenowanie "zagnieżdżonych" topk SAE z progowaniem
+
+** TODO
+:PROPERTIES:
+:CREATED:  <2025-10-22 śro> [21:48]
 :END:

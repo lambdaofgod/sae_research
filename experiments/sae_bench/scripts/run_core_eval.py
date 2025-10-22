@@ -9,6 +9,7 @@ import fire
 from pathlib import Path
 
 import sae_bench.evals.core.main as core
+from backup_utils import backup_eval_results
 
 
 def load_params():
@@ -103,6 +104,9 @@ def main(saes_dir: str, output_dir: str):
 
     # Load SAEs
     selected_saes = load_saes(saes_dir)
+
+    # Backup existing eval_results before running (sae_bench will clean them)
+    backup_eval_results(output_dir)
 
     # Run core evaluation
     run_core_evaluation(selected_saes, params, output_dir)

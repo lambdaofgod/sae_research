@@ -14,6 +14,7 @@ import sae_bench.custom_saes.relu_sae as relu_sae
 import sae_bench.sae_bench_utils.general_utils as general_utils
 from sae_bench.sae_bench_utils.sae_selection_utils import get_saes_from_regex
 from sae_research.instance_sae import InstanceHardThresholdingPursuitSAE, MPSAE
+from sae_research.dictionary_learning_adapters import load_nested_thresholding_sae
 
 
 def load_params():
@@ -151,6 +152,81 @@ def create_mpsae_variants(sae, params, d_in, d_sae, model_name, hook_layer, devi
     return mpsaes
 
 
+def load_nested_thresholding_saes(params, device, torch_dtype, str_dtype):
+    """Load Nested Thresholding SAEs from dictionary-learning paths"""
+    if not params.get('nested_thresholding_saes', {}).get('enabled', False):
+        print("\nNested Thresholding SAEs disabled, skipping...")
+        return []
+
+    print("\n=== Loading Nested Thresholding SAEs ===")
+
+    nested_saes = []
+    model_name = params['model']['name']
+
+    # Handle model name variations (e.g., pythia-70m-deduped vs EleutherAI/pythia-70m-deduped)
+    # Extract just the model name without the org prefix for compatibility
+    if '/' in model_name:
+        model_short = model_name.split('/')[-1]
+    else:
+        model_short = model_name
+
+    for sae_config in params['nested_thresholding_saes']['saes']:
+        sae_path = Path(sae_config['path'])
+
+        # Make path relative to project root if not absolute
+        if not sae_path.is_absolute():
+            project_root = Path(__file__).parent.parent.parent.parent  # Go up to sae_research/ (4 levels up from scripts/)
+            sae_path = project_root / sae_path
+
+        print(f"\nLoading nested SAE from: {sae_path}")
+
+        # Load the nested SAE
+        wrapped_sae = load_nested_thresholding_sae(
+            str(sae_path),
+            model_name=model_short,
+            device=device,
+            dtype=torch_dtype
+        )
+
+        # Extract metadata from path for naming
+        # Expected path: .../resid_post_layer_X/trainer_Y/
+        path_parts = sae_path.parts
+        layer_info = None
+        trainer_info = None
+
+        for part in path_parts:
+            if 'layer' in part:
+                layer_info = part
+            elif 'trainer' in part:
+                trainer_info = part
+
+        # Extract layer and trainer numbers
+        if layer_info and 'layer_' in layer_info:
+            layer = layer_info.split('layer_')[-1]
+        else:
+            layer = wrapped_sae.cfg.hook_layer
+
+        if trainer_info and 'trainer_' in trainer_info:
+            trainer = trainer_info.split('_')[-1]
+        else:
+            trainer = "0"
+
+        # Create separate SAE for each k value
+        for k in wrapped_sae.k_values:
+            print(f"  Creating variant with k={k}")
+            k_variant = wrapped_sae.create_single_k_variant(k)
+
+            # Generate name for this k variant
+            # Format: model_nested_topk_kX_layerY_trainerZ
+            sae_name = f"{model_short.replace('-', '')}_nested_topk_k{k}_layer{layer}_trainer{trainer}"
+
+            nested_saes.append((sae_name, k_variant))
+            print(f"  Added: {sae_name}")
+
+    print(f"\nLoaded {len(nested_saes)} nested SAE variant(s)")
+    return nested_saes
+
+
 def parse_sae_filename(filename):
     """Parse SAE filename to extract components for naming
 
@@ -276,6 +352,9 @@ def main(output_dir: str, gpu_id: int = None):
         release, hook_point, trainer
     )
 
+    # Load nested thresholding SAEs
+    nested_saes = load_nested_thresholding_saes(params, device, torch_dtype, str_dtype)
+
     # Get comparison SAEs
     baseline_saes = get_comparison_saes(params)
 
@@ -293,6 +372,9 @@ def main(output_dir: str, gpu_id: int = None):
         s = params['sae_variants']['mpsae']['s_values'][i]
         name = generate_sae_name(release, hook_point, trainer, variant="mpsae", param=f"s{s}")
         custom_saes.append((name, mpsae))
+
+    # Add nested thresholding SAEs
+    custom_saes.extend(nested_saes)
 
     # Save SAEs
     save_saes(custom_saes, output_dir)

@@ -17,6 +17,7 @@ import fire
 from pathlib import Path
 
 import sae_bench.custom_saes.run_all_evals_custom_saes as run_all_evals_custom_saes
+from backup_utils import backup_specific_eval_results
 
 
 def load_params():
@@ -155,6 +156,9 @@ def main(
 
     # Load SAEs
     selected_saes = load_saes(saes_dir)
+
+    # Backup existing eval_results for this eval type before running
+    backup_specific_eval_results(eval_type)
 
     # Run this single evaluation type
     run_optional_evaluations(selected_saes, params, device, [eval_type])

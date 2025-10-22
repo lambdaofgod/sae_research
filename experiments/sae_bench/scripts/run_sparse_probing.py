@@ -11,6 +11,7 @@ from pathlib import Path
 
 import sae_bench.evals.sparse_probing.main as sparse_probing
 import sae_bench.sae_bench_utils.general_utils as general_utils
+from backup_utils import backup_eval_results
 
 
 def load_params():
@@ -124,6 +125,9 @@ def main(saes_dir: str, output_dir: str, gpu_id: int = None):
 
     # Load SAEs
     selected_saes = load_saes(saes_dir)
+
+    # Backup existing eval_results before running (sae_bench will clean them)
+    backup_eval_results(output_dir)
 
     # Run sparse probing evaluation
     run_sparse_probing_evaluation(selected_saes, params, device, output_dir)
