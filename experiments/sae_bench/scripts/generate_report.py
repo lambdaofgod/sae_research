@@ -33,7 +33,8 @@ def create_core_metrics_table(metrics: Dict[str, Any]) -> str:
         row = {
             'SAE Variant': sae_name,
             'KL Div': round(core.get('kl_div_score', 0), 3),
-            'CE Loss': round(core.get('ce_loss_score', 0), 3),
+            'CE Loss': round(core.get('ce_loss_with_sae', 0), 2),
+            'CE Score': round(core.get('ce_loss_score', 0), 3),
             'Explained Var': round(core.get('explained_variance', 0), 3),
             'MSE': round(core.get('mse', 0), 1),
             'CosSim': round(core.get('cossim', 0), 3),
@@ -48,6 +49,9 @@ def create_core_metrics_table(metrics: Dict[str, Any]) -> str:
 
     df = pd.DataFrame(rows)
     df = df.set_index('SAE Variant')
+
+    # Sort alphabetically by SAE Variant name
+    df = df.sort_index()
 
     # Convert to markdown with proper alignment
     return df.to_markdown()
@@ -87,12 +91,16 @@ def create_sparse_probing_table(metrics: Dict[str, Any]) -> str:
     if not rows:
         return "*No sparse probing metrics available*"
 
-    # Add LLM baseline as first row
-    if llm_baseline:
-        rows.insert(0, llm_baseline)
-
     df = pd.DataFrame(rows)
     df = df.set_index('SAE Variant')
+
+    # Sort alphabetically by SAE Variant name
+    df = df.sort_index()
+
+    # Add LLM baseline as first row (after sorting)
+    if llm_baseline:
+        llm_df = pd.DataFrame([llm_baseline]).set_index('SAE Variant')
+        df = pd.concat([llm_df, df])
 
     return df.to_markdown()
 
@@ -123,6 +131,45 @@ def create_scr_tpp_table(metrics: Dict[str, Any]) -> str:
 
     df = pd.DataFrame(rows)
     df = df.set_index('SAE Variant')
+
+    # Sort alphabetically by SAE Variant name
+    df = df.sort_index()
+
+    return df.to_markdown()
+
+
+def create_absorption_table(metrics: Dict[str, Any]) -> str:
+    """Create absorption metrics comparison table."""
+    rows = []
+
+    for sae_name, sae_data in metrics.items():
+        if 'absorption' not in sae_data:
+            continue
+
+        absorption = sae_data['absorption']
+        row = {
+            'SAE Variant': sae_name,
+            'Absorption Fraction': round(absorption.get('mean_absorption_fraction_score', 0), 3),
+            'Full Absorption': round(absorption.get('mean_full_absorption_score', 0), 3),
+            'Split Features': round(absorption.get('mean_num_split_features', 0), 1),
+        }
+
+        # Optionally add standard deviations in parentheses
+        if 'std_dev_absorption_fraction_score' in absorption:
+            row['Absorption Fraction Std'] = round(absorption.get('std_dev_absorption_fraction_score', 0), 3)
+        if 'std_dev_full_absorption_score' in absorption:
+            row['Full Absorption Std'] = round(absorption.get('std_dev_full_absorption_score', 0), 3)
+
+        rows.append(row)
+
+    if not rows:
+        return "*No absorption metrics available*"
+
+    df = pd.DataFrame(rows)
+    df = df.set_index('SAE Variant')
+
+    # Sort alphabetically by SAE Variant name
+    df = df.sort_index()
 
     return df.to_markdown()
 
@@ -186,6 +233,9 @@ def generate_report(
     print("Creating SCR & TPP table...")
     scr_tpp_table = create_scr_tpp_table(metrics)
 
+    print("Creating absorption metrics table...")
+    absorption_table = create_absorption_table(metrics)
+
     print("Creating eval config...")
     eval_config = create_eval_config(params, metrics)
 
@@ -200,6 +250,7 @@ def generate_report(
     report = report.replace('{CORE_METRICS_TABLE}', core_table)
     report = report.replace('{SPARSE_PROBING_TABLE}', sparse_probing_table)
     report = report.replace('{SCR_TPP_TABLE}', scr_tpp_table)
+    report = report.replace('{ABSORPTION_TABLE}', absorption_table)
 
     # Write output
     print(f"Writing report to {output_file}...")

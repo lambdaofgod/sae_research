@@ -5,9 +5,9 @@ random_seed: 42
 
 # Model configuration
 model:
-  name: "pythia-70m-deduped"
-  llm_batch_size: 64  # Lower for memory constraints (affects sparse probing, core eval, etc.)
-  torch_dtype: "float32"
+  name: "google/gemma-2-2b"
+  llm_batch_size: 8  # Reduced from 16 to prevent SCR CUDA OOM errors
+  torch_dtype: "bfloat16"
   device: "cuda"  # or "cpu"
 
 # GPU Assignment for Multi-GPU Parallelization
@@ -31,8 +31,8 @@ gpu_assignment:
 # Used as the base for creating custom variants (IHTP, MPSAE)
 baseline_sae:
   repo_id: "canrager/lm_sae"  # HuggingFace repository
-  filename: "pythia70m_sweep_standard_ctx128_0712/resid_post_layer_3/trainer_8/ae.pt"  # Exact file path in repo
-  hook_layer: 3
+  filename: "gemma-2-2b_sweep_topk_ctx128_ef8_0824/resid_post_layer_11/trainer_0/ae.pt"
+  hook_layer: 11
   training_tokens: 200_000_000
 
 # SAE variant configurations
@@ -48,23 +48,23 @@ sae_variants:
 
 # Baseline comparison SAEs from SAE Bench
 comparison_saes:
-  enabled: false  # Disable for now - can enable if pythia comparison SAEs are available
-  sae_regex_pattern: "(pythia70m_sweep_topk_ctx128).*"
-  sae_block_pattern: ".*blocks\\.([3])\\.hook_resid_post__trainer_(8)$"
+  enabled: true
+  sae_regex_pattern: "gemma-scope-2b-pt-res-canonical"
+  sae_block_pattern: "layer_11/width_.*/canonical"
 
 # Nested Thresholding SAE configuration
 nested_thresholding_saes:
   enabled: true
   saes:
-    - path: "dictionary_learning_saes/saes_EleutherAI_pythia-70m-deduped_nested_thresholding_topk/resid_post_layer_3/trainer_0"
+    - path: "dictionary_learning_saes/saes_l11_google_gemma-2-2b_nested_thresholding_topk/resid_post_layer_11/trainer_0"
       # Will auto-detect k_values from config: [20, 40, 80, 160, 320]
-    - path: "dictionary_learning_saes/saes_EleutherAI_pythia-70m-deduped_nested_thresholding_topk/resid_post_layer_3/trainer_1"
+      # - path: "dictionary_learning_saes/saes_l11_google_gemma-2-2b_nested_thresholding_topk/resid_post_layer_11/trainer_1"
 
 # Evaluation types to run
 eval_types:
   core: true
-  sparse_probing: true
-  absorption: false  # Not recommended for models < 2B parameters (pythia-70m is too small)
+  sparse_probing: true 
+  absorption: true # Not recommended for models < 2B parameters (pythia-70m is too small)
   scr: true
   tpp: true
   autointerp: false  # Must be run as script, not in notebook
@@ -74,7 +74,7 @@ eval_types:
 core_eval:
   n_eval_reconstruction_batches: 2000
   n_eval_sparsity_variance_batches: 2000
-  eval_batch_size_prompts: 8
+  eval_batch_size_prompts: 4 
   compute_featurewise_density_statistics: true
   compute_featurewise_weight_based_metrics: true
   exclude_special_tokens_from_reconstruction: true
@@ -88,7 +88,7 @@ sparse_probing:
   # Additional datasets can be added here:
   # - "dataset_name_2"
   # - "dataset_name_3"
-  sae_batch_size: 128  # Lower batch size for memory constraints
+  sae_batch_size: 4 # Reduced from 16 to prevent CUDA OOM errors
 
 # Activation caching settings
 # Set to true if evaluating multiple SAEs on the same layer

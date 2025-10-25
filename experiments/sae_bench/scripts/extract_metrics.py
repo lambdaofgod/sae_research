@@ -20,6 +20,7 @@ def extract_core_metrics(data: Dict[str, Any]) -> Dict[str, Any]:
     if 'model_performance_preservation' in result_metrics:
         mpp = result_metrics['model_performance_preservation']
         metrics['ce_loss_score'] = mpp.get('ce_loss_score')
+        metrics['ce_loss_with_sae'] = mpp.get('ce_loss_with_sae')
 
     # Reconstruction quality metrics
     if 'reconstruction_quality' in result_metrics:
@@ -127,13 +128,21 @@ def extract_absorption_metrics(data: Dict[str, Any]) -> Dict[str, Any]:
     metrics = {}
     result_metrics = data.get('eval_result_metrics', {})
 
-    # Absorption metrics structure may vary, extract what's available
-    if 'absorption_metrics' in result_metrics:
-        abs_metrics = result_metrics['absorption_metrics']
-        # Add specific absorption metrics when structure is known
-        for key, value in abs_metrics.items():
-            if isinstance(value, (int, float)):
-                metrics[key] = value
+    # Extract from mean metrics (where absorption results actually are)
+    if 'mean' in result_metrics:
+        mean_metrics = result_metrics['mean']
+        # Extract key absorption metrics
+        absorption_keys = [
+            'mean_absorption_fraction_score',
+            'mean_full_absorption_score',
+            'mean_num_split_features',
+            'std_dev_absorption_fraction_score',
+            'std_dev_full_absorption_score',
+            'std_dev_num_split_features'
+        ]
+        for key in absorption_keys:
+            if key in mean_metrics:
+                metrics[key] = mean_metrics[key]
 
     return metrics
 

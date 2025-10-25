@@ -17,6 +17,8 @@ import fire
 from pathlib import Path
 
 import sae_bench.custom_saes.run_all_evals_custom_saes as run_all_evals_custom_saes
+import sae_bench.evals.scr_and_tpp.main as scr_and_tpp
+import sae_bench.evals.scr_and_tpp.eval_config as scr_config
 from backup_utils import backup_specific_eval_results
 
 
@@ -63,6 +65,43 @@ def load_saes(saes_dir: str):
 # Removed get_enabled_eval_types - no longer needed since we run one eval type at a time
 
 
+def run_scr_or_tpp_with_low_vram(selected_saes, model_name, llm_batch_size,
+                                  str_dtype, device, save_activations,
+                                  perform_scr=True):
+    """Run SCR or TPP evaluation with lower VRAM usage mode enabled.
+
+    Args:
+        selected_saes: List of SAE tuples
+        model_name: Model name (sae_bench format)
+        llm_batch_size: Batch size for LLM
+        str_dtype: Data type string
+        device: CUDA device
+        save_activations: Whether to save activations
+        perform_scr: If True, run SCR; if False, run TPP
+
+    Returns:
+        Evaluation results
+    """
+    eval_config = scr_config.ScrAndTppEvalConfig(
+        model_name=model_name,
+        random_seed=42,  # Using same seed as in sae_bench
+        perform_scr=perform_scr,
+        llm_batch_size=llm_batch_size,
+        llm_dtype=str_dtype,
+        lower_vram_usage=True,  # Enable lower VRAM mode
+    )
+
+    return scr_and_tpp.run_eval(
+        eval_config,
+        selected_saes,
+        device,
+        "eval_results",  # Output directory
+        force_rerun=False,
+        clean_up_activations=True,
+        save_activations=save_activations,
+    )
+
+
 def run_optional_evaluations(selected_saes, params, device, eval_types):
     """Run optional evaluations on selected SAEs
 
@@ -88,22 +127,52 @@ def run_optional_evaluations(selected_saes, params, device, eval_types):
     str_dtype = params['model']['torch_dtype']
     save_activations = params['activation_caching']['save_activations']
 
+    # Map model names to sae_bench expected format
+    sae_bench_model_name = model_name
+    if model_name == "google/gemma-2-2b":
+        sae_bench_model_name = "gemma-2-2b"
+
     print(f"\nEvaluation settings:")
     print(f"  Model: {model_name}")
     print(f"  Batch size: {llm_batch_size}")
     print(f"  Save activations: {save_activations}")
 
-    results = run_all_evals_custom_saes.run_evals(
-        model_name,
-        selected_saes,
-        llm_batch_size,
-        str_dtype,
-        device,
-        eval_types,
-        api_key=None,
-        force_rerun=False,
-        save_activations=save_activations,
-    )
+    # Special handling for SCR and TPP with lower_vram_usage
+    if eval_types == ['scr']:
+        print("  Using lower_vram_usage mode for SCR to reduce memory consumption")
+        results = run_scr_or_tpp_with_low_vram(
+            selected_saes,
+            sae_bench_model_name,
+            llm_batch_size,
+            str_dtype,
+            device,
+            save_activations,
+            perform_scr=True
+        )
+    elif eval_types == ['tpp']:
+        print("  Using lower_vram_usage mode for TPP to reduce memory consumption")
+        results = run_scr_or_tpp_with_low_vram(
+            selected_saes,
+            sae_bench_model_name,
+            llm_batch_size,
+            str_dtype,
+            device,
+            save_activations,
+            perform_scr=False
+        )
+    else:
+        # Use standard evaluation for other eval types
+        results = run_all_evals_custom_saes.run_evals(
+            sae_bench_model_name,
+            selected_saes,
+            llm_batch_size,
+            str_dtype,
+            device,
+            eval_types,
+            api_key=None,
+            force_rerun=False,
+            save_activations=save_activations,
+        )
 
     print(f"\n=== Optional Evaluations Complete ===")
     print(f"Results saved to eval_results/ (hardcoded by sae_bench)")

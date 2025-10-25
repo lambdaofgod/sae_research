@@ -325,32 +325,50 @@ def main(output_dir: str, gpu_id: int = None):
     # Setup environment
     device = setup_environment(params)
 
-    # Load baseline SAE
-    sae, d_in, d_sae, hook_layer, torch_dtype, str_dtype = load_baseline_sae(params, device)
+    # Check if baseline SAE is needed (for IHTP or MPSAE variants)
+    ihtp_enabled = params.get('sae_variants', {}).get('ihtp', {}).get('enabled', False)
+    mpsae_enabled = params.get('sae_variants', {}).get('mpsae', {}).get('enabled', False)
+    baseline_needed = ihtp_enabled or mpsae_enabled
 
-    # Configure baseline SAE
-    model_name = params['model']['name']
-    hook_name = f"blocks.{hook_layer}.hook_resid_post"
-    baseline_filename = params['baseline_sae']['filename']
+    # Initialize variables
+    sae = None
+    baseline_sae_name = None
+    ihtp_saes = []
+    mpsaes = []
 
-    # Parse filename for uniform naming
-    release, hook_point, trainer = parse_sae_filename(baseline_filename)
-    baseline_sae_name = generate_sae_name(release, hook_point, trainer)
+    if baseline_needed:
+        # Load baseline SAE
+        sae, d_in, d_sae, hook_layer, torch_dtype, str_dtype = load_baseline_sae(params, device)
 
-    sae = configure_baseline_sae(
-        sae, params, model_name, d_in, d_sae, hook_name, hook_layer, str_dtype
-    )
+        # Configure baseline SAE
+        model_name = params['model']['name']
+        hook_name = f"blocks.{hook_layer}.hook_resid_post"
+        baseline_filename = params['baseline_sae']['filename']
 
-    # Create variant SAEs
-    ihtp_saes = create_ihtp_variants(
-        sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype,
-        release, hook_point, trainer
-    )
+        # Parse filename for uniform naming
+        release, hook_point, trainer = parse_sae_filename(baseline_filename)
+        baseline_sae_name = generate_sae_name(release, hook_point, trainer)
 
-    mpsaes = create_mpsae_variants(
-        sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype,
-        release, hook_point, trainer
-    )
+        sae = configure_baseline_sae(
+            sae, params, model_name, d_in, d_sae, hook_name, hook_layer, str_dtype
+        )
+
+        # Create variant SAEs
+        ihtp_saes = create_ihtp_variants(
+            sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype,
+            release, hook_point, trainer
+        )
+
+        mpsaes = create_mpsae_variants(
+            sae, params, d_in, d_sae, model_name, hook_layer, device, torch_dtype, str_dtype,
+            release, hook_point, trainer
+        )
+    else:
+        print("\n=== Baseline SAE disabled (IHTP and MPSAE variants not enabled) ===")
+        # Get torch_dtype for nested SAEs
+        torch_dtype_str = params['model']['torch_dtype']
+        torch_dtype = getattr(torch, torch_dtype_str)
+        str_dtype = torch_dtype_str
 
     # Load nested thresholding SAEs
     nested_saes = load_nested_thresholding_saes(params, device, torch_dtype, str_dtype)
@@ -359,19 +377,25 @@ def main(output_dir: str, gpu_id: int = None):
     baseline_saes = get_comparison_saes(params)
 
     # Collect all custom SAEs with names
-    custom_saes = [(baseline_sae_name, sae)]
+    custom_saes = []
+
+    # Add baseline SAE if it was loaded
+    if baseline_sae_name is not None and sae is not None:
+        custom_saes.append((baseline_sae_name, sae))
 
     # Add IHTP SAEs with generated names
-    for i, ihtp_sae in enumerate(ihtp_saes):
-        k = params['sae_variants']['ihtp']['k_values'][i]
-        name = generate_sae_name(release, hook_point, trainer, variant="ihtp", param=f"k{k}")
-        custom_saes.append((name, ihtp_sae))
+    if ihtp_saes and baseline_needed:
+        for i, ihtp_sae in enumerate(ihtp_saes):
+            k = params['sae_variants']['ihtp']['k_values'][i]
+            name = generate_sae_name(release, hook_point, trainer, variant="ihtp", param=f"k{k}")
+            custom_saes.append((name, ihtp_sae))
 
     # Add MPSAE SAEs with generated names
-    for i, mpsae in enumerate(mpsaes):
-        s = params['sae_variants']['mpsae']['s_values'][i]
-        name = generate_sae_name(release, hook_point, trainer, variant="mpsae", param=f"s{s}")
-        custom_saes.append((name, mpsae))
+    if mpsaes and baseline_needed:
+        for i, mpsae in enumerate(mpsaes):
+            s = params['sae_variants']['mpsae']['s_values'][i]
+            name = generate_sae_name(release, hook_point, trainer, variant="mpsae", param=f"s{s}")
+            custom_saes.append((name, mpsae))
 
     # Add nested thresholding SAEs
     custom_saes.extend(nested_saes)
