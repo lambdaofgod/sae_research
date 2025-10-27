@@ -9,6 +9,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "dictionary-learning",
     "dotenv>=0.9.9",
     "dvc>=3.63.0",
     "fire>=0.7.1",
@@ -34,3 +35,6 @@ find_sae_bench_models = "scripts.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sae_research"]
+
+[tool.uv.sources]
+dictionary-learning = { git = "https://github.com/saprmarks/dictionary_learning" }
