@@ -1,0 +1,126 @@
+# SAE Bench Pipeline Configuration
+
+# Random seed for reproducibility
+random_seed: 42
+
+# Model configuration
+model:
+  name: "google/gemma-2-2b"
+  llm_batch_size: 8  # Reduced from 16 to prevent SCR CUDA OOM errors
+  torch_dtype: "bfloat16"
+  device: "cuda"  # or "cpu"
+
+# GPU Assignment for Multi-GPU Parallelization
+# Maps DVC stages to specific GPUs
+# For single GPU: all stages use gpu_id: 0
+# For multi-GPU: assign different stages to different GPUs and run `dvc repro -j N`
+gpu_assignment:
+  sparse_probing_eval: 0
+  scr_eval: 0
+  tpp_eval: 0
+  absorption_eval: 0
+  unlearning_eval: 0
+  # Example multi-GPU setup (uncomment when you have multiple GPUs):
+  # core_eval: 0
+  # sparse_probing_eval: 1
+  # scr_eval: 2
+  # tpp_eval: 3
+
+# Baseline SAE configuration
+# This loads ONE specific SAE directly from HuggingFace
+# Used as the base for creating custom variants (IHTP, MPSAE)
+baseline_sae:
+  repo_id: "canrager/lm_sae"  # HuggingFace repository
+  filename: "gemma-2-2b_sweep_topk_ctx128_ef8_0824/resid_post_layer_11/trainer_0/ae.pt"
+  hook_layer: 11
+  training_tokens: 200_000_000
+
+# SAE variant configurations
+sae_variants:
+  # Instance Hard Thresholding Pursuit SAE
+  ihtp:
+    enabled: false
+    k_values: [5, 10]  # Top-k values for IHTP
+  # Matching Pursuit SAE
+  mpsae:
+    enabled: false
+    s_values: [50, 100, 250]  # Sparsity levels for MPSAE
+
+# Baseline comparison SAEs from SAE Bench
+comparison_saes:
+  enabled: true
+  sae_regex_pattern: "gemma-scope-2b-pt-res-canonical"
+  sae_block_pattern: "layer_11/width_.*/canonical"
+
+# Nested Thresholding SAE configuration
+nested_thresholding_saes:
+  enabled: true
+  saes:
+    - path: "dictionary_learning_saes/saes_l11_google_gemma-2-2b_nested_thresholding_topk/resid_post_layer_11/trainer_0"
+      # Will auto-detect k_values from config: [20, 40, 80, 160, 320]
+      # - path: "dictionary_learning_saes/saes_l11_google_gemma-2-2b_nested_thresholding_topk/resid_post_layer_11/trainer_1"
+
+# Evaluation types to run
+eval_types:
+  core: true
+  sparse_probing: true 
+  absorption: true # Not recommended for models < 2B parameters (pythia-70m is too small)
+  scr: true
+  tpp: true
+  autointerp: false  # Must be run as script, not in notebook
+  unlearning: false  # Requires instruct-tuned model >= 2B params
+
+# Core evaluation settings
+core_eval:
+  n_eval_reconstruction_batches: 2000
+  n_eval_sparsity_variance_batches: 2000
+  eval_batch_size_prompts: 4 
+  compute_featurewise_density_statistics: true
+  compute_featurewise_weight_based_metrics: true
+  exclude_special_tokens_from_reconstruction: true
+  dataset: "Skylion007/openwebtext"
+  context_size: 128
+
+# Sparse probing evaluation settings
+sparse_probing:
+  dataset_names:
+    - "LabHC/bias_in_bios_class_set1"
+  # Additional datasets can be added here:
+  # - "dataset_name_2"
+  # - "dataset_name_3"
+  sae_batch_size: 4 # Reduced from 16 to prevent CUDA OOM errors
+
+# Activation caching settings
+# Set to true if evaluating multiple SAEs on the same layer
+# Requires at least 100GB of disk space
+activation_caching:
+  save_activations: false
+
+# Visualization settings
+visualization:
+  # Top-k value for accuracy metrics in plots
+  k: 1
+
+  # Marker shapes for different SAE architectures
+  trainer_markers:
+    standard: "o"
+    jumprelu: "X"
+    topk: "^"
+    p_anneal: "*"
+    gated: "d"
+    vanilla: "s"
+    ihtp: "p"  # pentagon for IHTP
+    mpsae: "D"  # diamond for MPSAE
+    nested_topk: "H"  # hexagon for nested thresholding
+
+  # Colors for different training configurations
+  trainer_colors:
+    standard: "blue"
+    jumprelu: "orange"
+    topk: "green"
+    p_anneal: "red"
+    gated: "purple"
+    vanilla: "black"
+    ihtp: "cyan"
+    mpsae: "magenta"
+    nested_topk: "brown"

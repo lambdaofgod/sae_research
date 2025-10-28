@@ -1,0 +1,239 @@
+# SAE Bench DVC Pipeline
+# This pipeline evaluates SAE variants using the SAE Bench framework
+
+stages:
+  # Stage 1: Setup - Load baseline SAE and create custom variants
+  setup:
+    cmd: python scripts/setup_saes.py results/downloaded_saes
+    deps:
+      - scripts/setup_saes.py
+    params:
+      - model
+      - baseline_sae
+      - sae_variants
+      - comparison_saes
+      - random_seed
+    outs:
+      - results/downloaded_saes
+
+  # Stage 2: Core Evaluation - Basic reconstruction and sparsity metrics
+  core_eval:
+    cmd: python scripts/run_core_eval.py results/downloaded_saes results/core
+    deps:
+      - scripts/run_core_eval.py
+      - results/downloaded_saes
+    params:
+      - model
+      - core_eval
+      - eval_types.core
+    outs:
+      - results/core
+    # Only run if core evaluation is enabled
+    # Note: DVC doesn't support conditional stages directly,
+    # but the script checks eval_types.core and exits if disabled
+
+  # Stage 3: Sparse Probing Evaluation
+  sparse_probing_eval:
+    cmd: python scripts/run_sparse_probing.py results/downloaded_saes results/sparse_probing
+    deps:
+      - scripts/run_sparse_probing.py
+      - results/downloaded_saes
+    params:
+      - model
+      - sparse_probing
+      - eval_types.sparse_probing
+      - activation_caching
+      - random_seed
+    outs:
+      - results/sparse_probing
+
+  # NOTE: eval_results/* paths are HARDCODED by sae_bench library
+  # The library ignores any output_dir parameter and always writes to eval_results/
+  # All downstream stages (metrics, process_results, visualize) MUST use these paths
+
+  # Stage 4a: SCR Evaluation
+  scr_eval:
+    cmd: python scripts/run_optional_evals.py scr results/downloaded_saes
+    deps:
+      - scripts/run_optional_evals.py
+      - results/downloaded_saes
+    params:
+      - model
+      - eval_types.scr
+      - activation_caching
+    outs:
+      - eval_results/scr:  # HARDCODED by sae_bench - cannot be changed
+          persist: true
+
+  # Stage 4b: TPP Evaluation
+  tpp_eval:
+    cmd: python scripts/run_optional_evals.py tpp results/downloaded_saes
+    deps:
+      - scripts/run_optional_evals.py
+      - results/downloaded_saes
+    params:
+      - model
+      - eval_types.tpp
+      - activation_caching
+    outs:
+      - eval_results/tpp:  # HARDCODED by sae_bench - cannot be changed
+          persist: true
+
+  # Stage 4c: Absorption Evaluation
+  absorption_eval:
+    cmd: python scripts/run_optional_evals.py absorption results/downloaded_saes
+    deps:
+      - scripts/run_optional_evals.py
+      - results/downloaded_saes
+    params:
+      - model
+      - eval_types.absorption
+      - activation_caching
+    outs:
+      - eval_results/absorption:  # HARDCODED by sae_bench - cannot be changed
+          persist: true
+
+  # Stage 4d: Unlearning Evaluation
+  unlearning_eval:
+    cmd: python scripts/run_optional_evals.py unlearning results/downloaded_saes
+    deps:
+      - scripts/run_optional_evals.py
+      - results/downloaded_saes
+    params:
+      - model
+      - eval_types.unlearning
+      - activation_caching
+    outs:
+      - eval_results/unlearning:  # HARDCODED by sae_bench - cannot be changed
+          persist: true
+
+  # Stage 5: Process Results - Merge core and eval-specific metrics
+  # NOTE: Uses eval_results/* for optional evals (hardcoded by sae_bench)
+  process_results:
+    cmd: python scripts/process_results.py results/core results/sparse_probing eval_results/absorption eval_results/scr eval_results/tpp results/merged
+    deps:
+      - scripts/process_results.py
+      - results/core
+    params:
+      - eval_types
+    outs:
+      - results/merged
+
+  # Stage 6: Visualize - Generate comparison plots
+  # NOTE: Uses eval_results/* for optional evals (hardcoded by sae_bench)
+  visualize:
+    cmd: python scripts/visualize_results.py results/core results/sparse_probing eval_results/absorption eval_results/scr eval_results/tpp results/images
+    deps:
+      - scripts/visualize_results.py
+      - results/core
+    params:
+      - eval_types
+      - visualization
+    outs:
+      - results/images:
+          persist: true
+
+  # === Metrics Extraction Stages ===
+  # These stages extract metrics from evaluation results without re-running evaluations
+  # NOTE: Optional evals use eval_results/* (hardcoded by sae_bench library)
+
+  # Extract metrics from core evaluation results
+  core_metrics:
+    cmd: python scripts/extract_metrics.py core results/core metrics/core.json
+    deps:
+      - scripts/extract_metrics.py
+      - results/core
+    metrics:
+      - metrics/core.json:
+          cache: false
+
+  # Extract metrics from sparse probing results
+  sparse_probing_metrics:
+    cmd: python scripts/extract_metrics.py sparse_probing results/sparse_probing metrics/sparse_probing.json
+    deps:
+      - scripts/extract_metrics.py
+      - results/sparse_probing
+    metrics:
+      - metrics/sparse_probing.json:
+          cache: false
+
+  # Extract metrics from SCR results (eval_results/scr hardcoded by sae_bench)
+  scr_metrics:
+    cmd: python scripts/extract_metrics.py scr eval_results/scr metrics/scr.json
+    deps:
+      - scripts/extract_metrics.py
+      - eval_results/scr
+    metrics:
+      - metrics/scr.json:
+          cache: false
+
+  # Extract metrics from TPP results (eval_results/tpp hardcoded by sae_bench)
+  tpp_metrics:
+    cmd: python scripts/extract_metrics.py tpp eval_results/tpp metrics/tpp.json
+    deps:
+      - scripts/extract_metrics.py
+      - eval_results/tpp
+    metrics:
+      - metrics/tpp.json:
+          cache: false
+
+  # Extract metrics from absorption results (eval_results/absorption hardcoded by sae_bench)
+  absorption_metrics:
+    cmd: python scripts/extract_metrics.py absorption eval_results/absorption metrics/absorption.json
+    deps:
+      - scripts/extract_metrics.py
+      - eval_results/absorption
+    metrics:
+      - metrics/absorption.json:
+          cache: false
+
+  # Extract metrics from unlearning results (eval_results/unlearning hardcoded by sae_bench)
+  unlearning_metrics:
+    cmd: python scripts/extract_metrics.py unlearning eval_results/unlearning metrics/unlearning.json
+    deps:
+      - scripts/extract_metrics.py
+      - eval_results/unlearning
+    metrics:
+      - metrics/unlearning.json:
+          cache: false
+
+  # Aggregate all metrics into a single file
+  aggregate_metrics:
+    cmd: python scripts/extract_metrics.py aggregate metrics/core.json metrics/sparse_probing.json metrics/scr.json metrics/tpp.json metrics/absorption.json metrics/unlearning.json metrics/all_metrics.json
+    deps:
+      - scripts/extract_metrics.py
+      - metrics/core.json
+      - metrics/sparse_probing.json
+      - metrics/scr.json
+      - metrics/tpp.json
+      - metrics/absorption.json
+      - metrics/unlearning.json
+    metrics:
+      - metrics/all_metrics.json:
+          cache: false
+
+  # Generate METRICS.md report from template and aggregated metrics
+  generate_report:
+    cmd: python scripts/generate_report.py
+    deps:
+      - scripts/generate_report.py
+      - METRICS_TEMPLATE.md
+      - metrics/all_metrics.json
+    params:
+      - model
+      - baseline_sae
+    outs:
+      - METRICS.md:
+          persist: true
+
+# Pipeline metadata
+# Run with: dvc repro
+# View DAG: dvc dag
+# Run specific stage: dvc repro <stage_name>
+#
+# Examples:
+#   Run specific evaluation: dvc repro scr_eval
+#   Run all core evaluations: dvc repro core_eval sparse_probing_eval
+#   Run all optional evaluations: dvc repro scr_eval tpp_eval absorption_eval unlearning_eval
+#   Extract metrics only: dvc repro core_metrics sparse_probing_metrics scr_metrics tpp_metrics
+#   Generate report: dvc repro generate_report

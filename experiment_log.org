@@ -131,3 +131,83 @@ Tak jak możnaby się spodziewać działają podobnie ale lepiej niż wyjściowe
 :END:
 
 Zaimplementowałem loadery pod SAEBench, ale nie mogę odpalić demo SAEBench w sae_research przez konflikt wersji
+** Metryki
+
+SAEBench ma swietna strone na Neuronpedii
+
+https://www.neuronpedia.org/sae-bench/info
+
+** SAEBench demo
+
+Odpalilem MPSAE i IHTPSAE w SAEBench - dzialaja i jedyny problem jest na koncu ze sparse probe (ale ten blad juz w sumie wychodzil tez bez tych SAE)
+
+** DVC
+:PROPERTIES:
+:CREATED:  <2025-10-18 sob> [13:46]
+:END:
+
+
+
+* Negative Results for SAEs On Downstream Tasks and Deprioritising SAE Research (GDM Mech Interp Team Progress Update #2)
+:PROPERTIES:
+:CREATED:  <2025-10-20 pon> [23:26]
+:END:
+
+https://www.alignmentforum.org/posts/4uXCAJNuPKtKBsi28/sae-progress-update-2-draft
+W tym poście jest sygnalizowane że SAE wyglądają na ślepą uliczkę, ALE w zasadzie to autorzy sami wymienili potencjalnie przydatne kierunki:
+
+#+BEGIN_QUOTE
+There are also other valuable projects, for example, *are there much cheaper ways we can train SAEs of acceptable quality? Or to get similar effects with other feature clustering or dictionary learning methods instead?* If we’re taking a pragmatic approach to SAEs, rather than the ambitious approach of trying to find the canonical units of analysis, then sacrificing some quality in return for lowering the major up front cost of SAE training may be worthwhile.
+#+END_QUOTE
+
+** Nurt 1 - zachłanne metody dekodowania i ich korzyści
+:PROPERTIES:
+:CREATED:  <2025-10-20 pon> [23:29]
+:END:
+
+*are there much cheaper ways we can train SAEs of acceptable quality? Or to get similar effects with other feature clustering or dictionary learning methods instead?*
+
+Jedyną pracą która wykorzystuje zachłanne metody dekodowania jest ta z MPSAE https://arxiv.org/pdf/2506.05239v1
+ale ta praca wykorzystuje tylko zachłanne dekodowanie /jako architekturę/, a nie jako coś co można użyć do wytrenowanego SAE.
+
+*** Hipoteza: dzięki zachłannemu dekodowaniu można pominąć trenowanie dla wielu hiperparametrów
+:PROPERTIES:
+:CREATED:  <2025-10-20 pon> [23:34]
+:END:
+
+Opiera się to na prostej obserwacji że metodami zachłannymi możemy sprowadzić model z wysokim $k$, powiedzmy 500, do $k=100$
+
+Eksperyment: sprawdzamy modele np TopK z różnym $k$ i porównujemy je do tego co otrzymaliśmy zachłannym dekodowaniem z modelu z najwyższym $k$
+
+
+
+* Pomysły z architekturą
+:PROPERTIES:
+:CREATED:  <2025-10-20 pon> [23:19]
+:END:
+
+** DONE Reprodukcja modeli z SAEBench
+:PROPERTIES:
+:CREATED:  <2025-10-20 pon> [23:16]
+:END:
+
+Wygląda na to że modele do SAEBench były trenowane przez skrypt w dictionary_learning_demo
+
+Oryginalnie to jest używane z 500M tokenów ale w sumie mnie bardziej podoba się pomysł żeby używać 5M (a potem może 50M) żeby przyspiszyć eksperymenty
+
+** DONE Modele z pursuit/progowaniem
+:PROPERTIES:
+:CREATED:  <2025-10-20 pon> [23:19]
+:END:
+
+https://github.com/adamkarvonen/dictionary_learning_demo/compare/main...lambdaofgod:dictionary_learning_demo:main
+
+Dodane trenowanie "zagnieżdżonych" topk SAE z progowaniem
+
+** AFA - quasi orthogonality
+:PROPERTIES:
+:CREATED:  <2025-10-22 śro> [21:48]
+:END:
+
+Praca faktycznie odwołuje się do mutual coherence (aczkolwiek nazywają ją "quasi-orthogonality")
+[[cite:&lee25_evaluat_desig_spars_autoen_by]]

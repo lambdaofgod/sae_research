@@ -167,7 +167,7 @@ get_hf_token()
 from datasets import load_dataset
 from transformer_lens import HookedTransformer
 from sae_lens import SAE
-from sae_research.instance_sae import load_from_sae_lens
+from sae_research.instance_sae import load_from_sae_lens, MPSAE
 
 model = HookedTransformer.from_pretrained("gemma-2-2b", device=device, dtype=torch.float16)
 
@@ -420,6 +420,16 @@ ihtp_sae = load_from_sae_lens(
     device=device,
 ).half()
 
+mp_sae = load_from_sae_lens(
+    model_name="gemma-2-2b",
+    release=sae_config["release"],
+    sae_id=sae_config["sae_id"],
+    s=50,  # per-position top-k
+    sae_cls=MPSAE,
+    hook_layer=19,
+    device=device,
+).half()
+
 
 # +
 def count_l0_per_token(x):
@@ -472,6 +482,13 @@ def ihtp_hook(activation, hook):
     return ihtp_sae.decode(x)
 
 
+def mp_hook(activation, hook):
+    x = mp_sae.encode(activation)
+    print("MP nonzero")
+    print_l0(x)
+    return mp_sae.decode(x)
+
+
 # -
 def zero_abl_hook(activation, hook):
     return torch.zeros_like(activation)
@@ -513,11 +530,20 @@ print(
 )
 print("###")
 print(
-    "reconstr_ihtp",
+    "iterative hard thresholding pursuit",
     model.run_with_hooks(
         batch_tokens,
         return_type="loss",
         fwd_hooks=[(sae.cfg.metadata.hook_name, ihtp_hook)],
+    ).item(),
+)
+print("###")
+print(
+    "matching pursuit",
+    model.run_with_hooks(
+        batch_tokens,
+        return_type="loss",
+        fwd_hooks=[(sae.cfg.metadata.hook_name, mp_hook)],
     ).item(),
 )
 print("###")
