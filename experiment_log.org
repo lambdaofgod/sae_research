@@ -116,3 +116,18 @@ Notebook odpala ich ewaluację i można go użyć do porównania paru modeli
 
 Dodałem InstanceHardThresholdingSAE (nazwa może nie do końca fortunna)
 i wyciągnąłem moduły do dopasowywania modelu liniowego i thresholdingu
+
+* MPSAE
+:PROPERTIES:
+:CREATED:  <2025-10-16 Thu> [00:03]
+:END:
+
+Okazuje się że faktycznie są prace z SAE opartym o zachłannym matching pursuit.
+Tak jak możnaby się spodziewać działają podobnie ale lepiej niż wyjściowe SAE (i nie mają tych dziwnych akcji z L0 co w moim podejściu)
+
+* SAEBench cd
+:PROPERTIES:
+:CREATED:  <2025-10-16 Thu> [00:04]
+:END:
+
+Zaimplementowałem loadery pod SAEBench, ale nie mogę odpalić demo SAEBench w sae_research przez konflikt wersji
