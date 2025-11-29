@@ -78,3 +78,14 @@ examples = list(dataset.take(100))
 df = pd.DataFrame(examples)
 df
 #+END_SRC
+
+#+BEGIN_SRC python :session embedder_sae.org  :exports both :async
+from sae_research.embedder_sae import load_embedder_and_sae
+
+sae_model = load_embedder_and_sae("experiments/embedder_sae/sae_sentence-transformers_all-MiniLM-L6-v2")
+embeddings = sae_model.encode(df["text"].tolist())
+embeddings.shape
+#+END_SRC
+
+#+RESULTS:
+| 100 | 384 |

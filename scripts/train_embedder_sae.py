@@ -1,3 +1,4 @@
+import json
 import os
 
 import fire
@@ -10,7 +11,11 @@ from sentence_transformers.sparse_encoder import (
 )
 from sentence_transformers.sparse_encoder.models import SparseAutoEncoder
 
-from sae_research.embedder_sae import SAEWrapper, EmbeddingReconstructionLoss
+from sae_research.embedder_sae import (
+    SAEWrapper,
+    EmbeddingReconstructionLoss,
+    NormalizedEmbeddingReconstructionLoss,
+)
 
 
 class SAEEmbedderTrainingConfig(BaseModel):
@@ -25,12 +30,13 @@ class SAEEmbedderTrainingConfig(BaseModel):
     disable_wandb: bool
     dataloader_num_workers: int
     dataloader_prefetch_factor: int
+    use_normalized_loss: bool
 
 
 def create_sae_wrapper(model_name: str, hidden_dim: int | None, k: int) -> SAEWrapper:
     teacher = SentenceTransformer(model_name)
     embedding_dim = teacher.encode("text").shape[0]
-    actual_hidden_dim = hidden_dim if hidden_dim is not None else 16 * embedding_dim
+    actual_hidden_dim = hidden_dim if hidden_dim is not None else 8 * embedding_dim
     sae = SparseAutoEncoder(input_dim=embedding_dim, hidden_dim=actual_hidden_dim, k=k)
     return SAEWrapper(teacher, sae)
 
@@ -44,9 +50,10 @@ def load_dataset_streaming(dataset_name: str, text_column: str) -> IterableDatas
 
 
 def get_output_dir(output_dir: str | None, model_name: str) -> str:
+    generated_name = "sae_" + model_name.replace("/", "_")
     if output_dir is not None:
-        return output_dir
-    return "sae_" + model_name.replace("/", "_")
+        return os.path.join(output_dir, generated_name)
+    return generated_name
 
 
 def train(config: SAEEmbedderTrainingConfig):
@@ -57,9 +64,12 @@ def train(config: SAEEmbedderTrainingConfig):
     )
     dataset = load_dataset_streaming(config.dataset_name, config.text_column)
 
-    loss = EmbeddingReconstructionLoss(
-        teacher=sae_wrapper.teacher, autoencoder=sae_wrapper.sae
+    loss_cls = (
+        NormalizedEmbeddingReconstructionLoss
+        if config.use_normalized_loss
+        else EmbeddingReconstructionLoss
     )
+    loss = loss_cls(teacher=sae_wrapper.teacher, autoencoder=sae_wrapper.sae)
     args = SparseEncoderTrainingArguments(
         max_steps=config.max_steps,
         per_device_train_batch_size=config.batch_size,
@@ -75,6 +85,10 @@ def train(config: SAEEmbedderTrainingConfig):
     output_dir = get_output_dir(config.output_dir, config.teacher_model_name)
     sae_wrapper.save(output_dir)
 
+    config_path = os.path.join(output_dir, "training_config.json")
+    with open(config_path, "w") as f:
+        json.dump(config.model_dump(), f, indent=2)
+
 
 def main(
     teacher_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
@@ -83,11 +97,12 @@ def main(
     dataset_name: str = "HuggingFaceFW/fineweb",
     text_column: str = "text",
     max_steps: int = 20000,
-    batch_size: int = 512,
+    batch_size: int = 1024,
     output_dir: str | None = None,
     disable_wandb: bool = True,
     dataloader_num_workers: int = 8,
     dataloader_prefetch_factor: int = 4,
+    use_normalized_loss: bool = True,
 ):
     config = SAEEmbedderTrainingConfig(
         teacher_model_name=teacher_model_name,
@@ -101,6 +116,7 @@ def main(
         disable_wandb=disable_wandb,
         dataloader_num_workers=dataloader_num_workers,
         dataloader_prefetch_factor=dataloader_prefetch_factor,
+        use_normalized_loss=use_normalized_loss,
     )
     train(config)
 

@@ -257,3 +257,10 @@ How to make this less crazy:
 :END:
 
 Trenowanie tych SAE dla embedderów jest dosyć prosto osiągnąć za pomocą sentence-transformers
+
+** trenowanie na fineweb
+:PROPERTIES:
+:CREATED:  <2025-11-29 sob> [14:19]
+:END:
+
+Bez dodania znormalizowanego MSE ten model zdawal sie nie bardzo czegos uczyc (okazalo sie to mega wazne bo np norma gradientu teraz nie jest jakas mikroskopijna)

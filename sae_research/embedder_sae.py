@@ -7,6 +7,7 @@ from sentence_transformers.sparse_encoder import (
 from sentence_transformers.sparse_encoder.models import SparseAutoEncoder
 from sentence_transformers import SentenceTransformer
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 import torch
 
@@ -29,6 +30,27 @@ class SAEWrapper(SentenceTransformer):
     ):
         super().__init__(modules=[*sentence_transformer, sae])
 
+    def save(self, path: str, **kwargs) -> None:
+        """Save only the SAE module + config with teacher model name."""
+        import json
+        import os
+        os.makedirs(path, exist_ok=True)
+        self.sae.save(path)
+        with open(os.path.join(path, "extra_config.json"), "w") as f:
+            json.dump({"teacher_model_name": self.teacher_model_name}, f)
+
+    @classmethod
+    def load(cls, path: str) -> "SAEWrapper":
+        """Load SAEWrapper from saved path."""
+        import json
+        import os
+        config_path = os.path.join(path, "extra_config.json")
+        with open(config_path) as f:
+            config = json.load(f)
+        teacher = SentenceTransformer(config["teacher_model_name"])
+        sae = SparseAutoEncoder.load(path)
+        return cls(teacher, sae)
+
     @property
     def sae(self) -> SparseAutoEncoder:
         return list(self._modules.values())[-1]
@@ -37,6 +59,11 @@ class SAEWrapper(SentenceTransformer):
     def teacher(self) -> SentenceTransformer:
         """Get the teacher model (all modules except SAE)"""
         return SentenceTransformer(modules=list(self._modules.values())[:-1])
+
+    @property
+    def teacher_model_name(self) -> str:
+        """Get the teacher model name from the first module."""
+        return list(self._modules.values())[0].auto_model.name_or_path
 
     def forward(
         self, features: dict[str, Tensor], max_active_dims: int | None = None
@@ -78,3 +105,23 @@ class EmbeddingReconstructionLoss(nn.Module):
 
         # 3. MSE between reconstruction and target
         return self.loss_fct(reconstruction, target)
+
+
+class NormalizedEmbeddingReconstructionLoss(EmbeddingReconstructionLoss):
+    """Uses normalized MSE: MSE(recon, target) / MSE(mean, target)"""
+
+    def forward(self, sentence_features: list[dict[str, Tensor]], labels=None) -> Tensor:
+        features = sentence_features[0]
+
+        with torch.no_grad():
+            teacher_out = self.teacher(features)
+            target = teacher_out["sentence_embedding"]
+
+        sae_out = self.autoencoder({"sentence_embedding": target})
+        sparse_latents = sae_out["sentence_embedding"]
+        reconstruction = self.autoencoder.decode(sparse_latents)
+
+        # Normalized MSE: divide by variance (MSE of predicting mean)
+        mse = F.mse_loss(reconstruction, target)
+        baseline_mse = F.mse_loss(target.mean(dim=0, keepdim=True).expand_as(target), target)
+        return mse / baseline_mse
