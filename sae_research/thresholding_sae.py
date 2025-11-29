@@ -314,7 +314,15 @@ class NestedThresholdingAutoEncoderTopK(ThresholdingAutoEncoderTopK):
         """
         Load a pretrained nested autoencoder from a file.
         """
-        state_dict = t.load(path)
+        checkpoint = t.load(path, map_location='cpu')
+
+        # Handle both raw state_dict and training checkpoint formats
+        if 'ae' in checkpoint:
+            # This is a training checkpoint, extract the model state_dict
+            state_dict = checkpoint['ae']
+        else:
+            # This is already a state_dict
+            state_dict = checkpoint
 
         # Get dimensions from decoder - try multiple possible keys
         decoder_weight_key = None

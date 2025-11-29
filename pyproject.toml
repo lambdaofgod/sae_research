@@ -21,6 +21,7 @@ dependencies = [
     "sae-lens==5.4.0",
     "scikit-learn>=1.7.1",
     "seaborn>=0.13.2",
+    "sympy>=1.14.0",
     "trackio==0.5.0",
     "transformer-lens>=2.16.1",
 ]
@@ -38,3 +39,6 @@ packages = ["sae_research"]
 
 [tool.uv.sources]
 dictionary-learning = { git = "https://github.com/saprmarks/dictionary_learning" }
+
+[tool.uv.workspace]
+members = ["ARENA_tutorials"]

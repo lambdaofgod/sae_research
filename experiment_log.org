@@ -190,7 +190,48 @@ https://github.com/adamkarvonen/dictionary_learning_demo/compare/main...lambdaof
 
 Dodane trenowanie "zagnieżdżonych" topk SAE z progowaniem
 
-** TODO
+* [#A] quasi-orthogonal
 :PROPERTIES:
 :CREATED:  <2025-10-22 śro> [21:48]
 :END:
+
+[[cite:&lee25_evaluat_desig_spars_autoen_by]]
+
+Ta praca explicite rozważa mutual coherence, ale wiele jej brakuje
+to ograniczenie z Johnsona-Lindenstraussa jest dużo słabsze - ograniczenia RIP
+mają dużo więcej sensu
+
+* Open problem in MI C*4.26
+:PROPERTIES:
+:CREATED:  <2025-10-30 czw> [22:03]
+:END:
+
+#+BEGIN_QUOTE
+C* 4.26 - Can you find any examples of locally almost-orthogonal bases? That is, where correlated features each get their own direction, but can interfere significantly with un/anti-correlated features.
+#+END_QUOTE
+
+* take: algebraic geometry
+:PROPERTIES:
+:CREATED:  <2025-10-30 czw> [21:58]
+:END:
+
+** IDEA orthogonal rows - unit columns
+:PROPERTIES:
+:CREATED:  <2025-10-30 czw> [21:56]
+:END:
+
+$A$ is an $n \times p$ matrix such that
+
+$AA^T = diag(v)$ where $v$ is some vector and $\|A_:,i\| = 1$
+
+This is an algebraic variety
+
+** equiangular frames
+:PROPERTIES:
+:CREATED:  <2025-10-30 czw> [21:58]
+:END:
+
+Here the problem is that equiangularity is encoded by $A^T A$
+
+How to make this less crazy:
+- apply regularization in-batch on selected columns
