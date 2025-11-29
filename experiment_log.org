@@ -249,3 +249,11 @@ Here the problem is that equiangularity is encoded by $A^T A$
 
 How to make this less crazy:
 - apply regularization in-batch on selected columns
+
+
+* Embedder SAE
+:PROPERTIES:
+:CREATED:  <2025-11-29 Sat> [12:05]
+:END:
+
+Trenowanie tych SAE dla embedderów jest dosyć prosto osiągnąć za pomocą sentence-transformers
