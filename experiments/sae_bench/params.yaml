@@ -56,7 +56,7 @@ comparison_saes:
 nested_thresholding_saes:
   enabled: true
   saes:
-    - path: "dictionary_learning_saes/saes_l11_google_gemma-2-2b_nested_thresholding_topk/resid_post_layer_11/trainer_0"
+    - path: "dictionary_learning_saes/saes_test_200m_google_gemma-2-2b_nested_thresholding_topk/resid_post_layer_11/trainer_1"
       # Will auto-detect k_values from config: [20, 40, 80, 160, 320]
       # - path: "dictionary_learning_saes/saes_l11_google_gemma-2-2b_nested_thresholding_topk/resid_post_layer_11/trainer_1"
 
