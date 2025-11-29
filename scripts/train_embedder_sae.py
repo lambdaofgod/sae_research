@@ -1,3 +1,5 @@
+import os
+
 import fire
 from pydantic import BaseModel
 from datasets import load_dataset, IterableDataset
@@ -16,6 +18,7 @@ class SAEEmbedderTrainingConfig(BaseModel):
     text_column: str
     max_steps: int
     output_dir: str | None
+    disable_wandb: bool
 
 
 def create_sae_wrapper(model_name: str, hidden_dim: int | None, k: int) -> SAEWrapper:
@@ -37,6 +40,8 @@ def get_output_dir(output_dir: str | None, model_name: str) -> str:
 
 
 def train(config: SAEEmbedderTrainingConfig):
+    if config.disable_wandb:
+        os.environ["WANDB_DISABLED"] = "true"
     sae_wrapper = create_sae_wrapper(config.teacher_model_name, config.hidden_dim, config.k)
     dataset = load_dataset_streaming(config.dataset_name, config.text_column)
 
@@ -57,6 +62,7 @@ def main(
     text_column: str = "text",
     max_steps: int = 20000,
     output_dir: str | None = None,
+    disable_wandb: bool = True,
 ):
     config = SAEEmbedderTrainingConfig(
         teacher_model_name=teacher_model_name,
@@ -66,6 +72,7 @@ def main(
         text_column=text_column,
         max_steps=max_steps,
         output_dir=output_dir,
+        disable_wandb=disable_wandb,
     )
     train(config)
 
