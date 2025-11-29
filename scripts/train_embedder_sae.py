@@ -17,6 +17,7 @@ class SAEEmbedderTrainingConfig(BaseModel):
     dataset_name: str
     text_column: str
     max_steps: int
+    batch_size: int
     output_dir: str | None
     disable_wandb: bool
 
@@ -46,7 +47,7 @@ def train(config: SAEEmbedderTrainingConfig):
     dataset = load_dataset_streaming(config.dataset_name, config.text_column)
 
     loss = EmbeddingReconstructionLoss(teacher=sae_wrapper.teacher, autoencoder=sae_wrapper.sae)
-    args = SparseEncoderTrainingArguments(max_steps=config.max_steps)
+    args = SparseEncoderTrainingArguments(max_steps=config.max_steps, per_device_train_batch_size=config.batch_size)
     trainer = SparseEncoderTrainer(model=sae_wrapper, train_dataset=dataset, loss=loss, args=args)
     trainer.train()
 
@@ -61,6 +62,7 @@ def main(
     dataset_name: str = "HuggingFaceFW/fineweb",
     text_column: str = "text",
     max_steps: int = 20000,
+    batch_size: int = 1024,
     output_dir: str | None = None,
     disable_wandb: bool = True,
 ):
@@ -71,6 +73,7 @@ def main(
         dataset_name=dataset_name,
         text_column=text_column,
         max_steps=max_steps,
+        batch_size=batch_size,
         output_dir=output_dir,
         disable_wandb=disable_wandb,
     )
