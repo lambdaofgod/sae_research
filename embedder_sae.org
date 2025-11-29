@@ -1,0 +1,80 @@
+#+title: Embedder Sae
+
+#+BEGIN_SRC python :session embedder_sae.org  :exports both :async
+import sentence_transformers
+from datasets import Dataset, load_dataset
+from sentence_transformers.sparse_encoder import SparseEncoder, SparseEncoderTrainer, losses, SparseEncoderTrainingArguments
+from sentence_transformers.sparse_encoder.models import SparseAutoEncoder
+from sentence_transformers import SentenceTransformer
+import torch.nn as nn
+from torch import Tensor
+import os
+from sae_research.embedder_sae import SAEWrapper, TrainingSAEUtility
+import os
+
+
+teacher_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+teacher_model_dim = teacher_model.encode("text").shape[0]
+
+hidden_dim = teacher_model_dim * 16
+training_sae_wrapper = TrainingSAEUtility(
+    teacher_model,
+    SparseAutoEncoder(input_dim=teacher_model_dim, hidden_dim=hidden_dim, k=32),
+)
+#+END_SRC
+
+#+RESULTS:
+: None
+
+#+BEGIN_SRC python :session embedder_sae.org  :exports both :async
+os.environ["WANDB_DISABLED"] = "true"
+
+train_dataset = load_dataset("HuggingFaceFW/fineweb", streaming=True)
+# Dataset.from_dict(
+#     {
+#         "english": ["The first sentence", "The second sentence", "The third sentence", "The fourth sentence"],
+#         "french": ["La première phrase", "La deuxième phrase", "La troisième phrase", "La quatrième phrase"],
+#     }
+# )
+
+
+def compute_labels(batch):
+    return {"label": teacher_model.encode(batch["text"])}
+
+
+#+END_SRC
+
+#+RESULTS:
+: None
+
+#+BEGIN_SRC python :session embedder_sae.org  :exports both :async
+loss = sentence_transformers.losses.MSELoss(training_sae_wrapper)
+
+train_dataset = train_dataset["train"].map(compute_labels, batched=True)
+args = SparseEncoderTrainingArguments(
+    max_steps=2,                  # Train for 20k steps total
+)
+
+trainer = SparseEncoderTrainer(
+    model=training_sae_wrapper, train_dataset=train_dataset, loss=loss,
+    args=args
+)
+trainer.train()
+
+# Convert to inference wrapper
+sae_wrapper = training_sae_wrapper.to_sae_wrapper()
+assert sae_wrapper.encode(["This is a test sentence."]).shape[1] == hidden_dim
+#+END_SRC
+
+#+RESULTS:
+: /var/folders/t7/9zd9yqf17_zbfq2hwm8tv9ym0000gn/T/babel-H6JG5b/python-1Hr7uo
+
+#+BEGIN_SRC python :session embedder_sae.org  :exports both :async
+from datasets import load_dataset
+import pandas as pd
+
+dataset = load_dataset("HuggingFaceFW/fineweb", streaming=True)["train"]
+examples = list(dataset.take(100))
+df = pd.DataFrame(examples)
+df
+#+END_SRC
