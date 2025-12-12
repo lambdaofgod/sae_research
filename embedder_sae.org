@@ -1,91 +1,159 @@
 #+title: Embedder Sae
 
-#+BEGIN_SRC python :session embedder_sae.org  :exports both :async
-import sentence_transformers
-from datasets import Dataset, load_dataset
-from sentence_transformers.sparse_encoder import SparseEncoder, SparseEncoderTrainer, losses, SparseEncoderTrainingArguments
-from sentence_transformers.sparse_encoder.models import SparseAutoEncoder
-from sentence_transformers import SentenceTransformer
-import torch.nn as nn
-from torch import Tensor
-import os
-from sae_research.embedder_sae import SAEWrapper, TrainingSAEUtility
-import os
+* Loading data
+:PROPERTIES:
+:CREATED:  <2025-11-29 sob> [18:45]
+:END:
 
-
-teacher_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-teacher_model_dim = teacher_model.encode("text").shape[0]
-
-hidden_dim = teacher_model_dim * 16
-training_sae_wrapper = TrainingSAEUtility(
-    teacher_model,
-    SparseAutoEncoder(input_dim=teacher_model_dim, hidden_dim=hidden_dim, k=32),
-)
-#+END_SRC
-
-#+RESULTS:
-: None
-
-#+BEGIN_SRC python :session embedder_sae.org  :exports both :async
-os.environ["WANDB_DISABLED"] = "true"
-
-train_dataset = load_dataset("HuggingFaceFW/fineweb", streaming=True)
-# Dataset.from_dict(
-#     {
-#         "english": ["The first sentence", "The second sentence", "The third sentence", "The fourth sentence"],
-#         "french": ["La première phrase", "La deuxième phrase", "La troisième phrase", "La quatrième phrase"],
-#     }
-# )
-
-
-def compute_labels(batch):
-    return {"label": teacher_model.encode(batch["text"])}
-
-
-#+END_SRC
-
-#+RESULTS:
-: None
-
-#+BEGIN_SRC python :session embedder_sae.org  :exports both :async
-loss = sentence_transformers.losses.MSELoss(training_sae_wrapper)
-
-train_dataset = train_dataset["train"].map(compute_labels, batched=True)
-args = SparseEncoderTrainingArguments(
-    max_steps=2,                  # Train for 20k steps total
-)
-
-trainer = SparseEncoderTrainer(
-    model=training_sae_wrapper, train_dataset=train_dataset, loss=loss,
-    args=args
-)
-trainer.train()
-
-# Convert to inference wrapper
-sae_wrapper = training_sae_wrapper.to_sae_wrapper()
-assert sae_wrapper.encode(["This is a test sentence."]).shape[1] == hidden_dim
-#+END_SRC
-
-#+RESULTS:
-: /var/folders/t7/9zd9yqf17_zbfq2hwm8tv9ym0000gn/T/babel-H6JG5b/python-1Hr7uo
+This dataset was used for training
 
 #+BEGIN_SRC python :session embedder_sae.org  :exports both :async
 from datasets import load_dataset
 import pandas as pd
 
 dataset = load_dataset("HuggingFaceFW/fineweb", streaming=True)["train"]
-examples = list(dataset.take(100))
+examples = list(dataset.take(20000))
 df = pd.DataFrame(examples)
 df
 #+END_SRC
 
-#+BEGIN_SRC python :session embedder_sae.org  :exports both :async
-from sae_research.embedder_sae import load_embedder_and_sae
+#+RESULTS:
+#+begin_example
+                                                    text  ... token_count
+0      How AP reported in all formats from tornado-st...  ...         717
+1      Did you know you have two little yellow, nine-...  ...         821
+2      Car Wash For Clara!\nNow is your chance to hel...  ...         125
+3      Listeners Get Sky-high View of Missoula From H...  ...         103
+4      Log In Please enter your ECode to log in.\nFor...  ...          75
+...                                                  ...  ...         ...
+19995  The Belgic Confession became the basis of a co...  ...         537
+19996  Prince Pembroke looked happily at the ribbons ...  ...        1499
+19997  A low groan sounding something like a dying an...  ...        1016
+19998  I’m here to pick up where my colleague Tim Bur...  ...         509
+19999  Pros: A hard-working player that has a very go...  ...         465
 
-sae_model = load_embedder_and_sae("experiments/embedder_sae/sae_sentence-transformers_all-MiniLM-L6-v2")
+[20000 rows x 9 columns]
+#+end_example
+
+#+BEGIN_SRC python :session embedder_sae.org  :exports both
+df.columns
+#+END_SRC
+
+#+RESULTS:
+: Index(['text', 'id', 'dump', 'url', 'date', 'file_path', 'language',
+:        'language_score', 'token_count'],
+:       dtype='object')
+
+#+BEGIN_SRC python :session embedder_sae.org  :exports both :async
+from sae_research.embedder_sae import SAEWrapper
+
+sae_model = SAEWrapper.load("experiments/embedder_sae/t1/sae_sentence-transformers_all-MiniLM-L6-v2/")
 embeddings = sae_model.encode(df["text"].tolist())
 embeddings.shape
 #+END_SRC
 
 #+RESULTS:
-| 100 | 384 |
+| 20000 | 3072 |
+
+* Finding interesting latents
+:PROPERTIES:
+:CREATED:  <2025-11-29 sob> [18:46]
+:END:
+
+#+BEGIN_SRC python :session embedder_sae.org  :exports both :async
+import numpy as np
+import pandas as pd
+import tabulate
+
+
+latent_df = pd.DataFrame(embeddings)
+latent_nnz_df = latent_df > 0
+top_latents_by_max = latent_df.max(axis=0).sort_values(ascending=False)[:50]
+top_latents_by_max[:10]
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+2017    0.314713
+758     0.312560
+735     0.307252
+1992    0.302843
+1097    0.301744
+169     0.300160
+1904    0.298942
+854     0.295734
+1221    0.295290
+1131    0.294714
+dtype: float32
+#+end_example
+
+#+BEGIN_SRC python :session embedder_sae.org  :exports both
+def get_latent_metrics_df(latent_df, metrics: dict):
+    metric_cols = dict()
+    for metric_name, metric in metrics.items():
+        metric_cols[metric_name] = metric(latent_df)
+    return pd.DataFrame(metric_cols)
+
+
+def get_top_activating_examples_df(texts: pd.Series, latent_df, latent_metrics_df, topk=10):
+    """
+    returns a dataframe of shape (topk, num_metrics)
+    where each column corresponds to a metric and contains
+    topk activating example texts for the best latent according to that metric
+    """
+    result = {}
+    for metric_name in latent_metrics_df.columns:
+        best_latent_idx = latent_metrics_df[metric_name].idxmax()
+        activations = latent_df[best_latent_idx]
+        top_indices = activations.nlargest(topk).index
+        result[metric_name] = texts.iloc[top_indices].values
+    return pd.DataFrame(result)
+#+END_SRC
+
+#+RESULTS:
+: None
+
+
+#+BEGIN_SRC python :session embedder_sae.org  :exports both
+metrics_dict = {
+    "nnz": lambda df: df.sum(axis=0),
+    "std": lambda df: df.std(axis=0),
+    "max": lambda df: df.max(axis=0),
+    "entropy": scipy.stats.entropy
+}
+#+END_SRC
+
+#+RESULTS:
+: None
+
+#+BEGIN_SRC python :session embedder_sae.org  :exports both
+latent_metrics_df = get_latent_metrics_df(latent_df, metrics_dict)
+topk_examples_by_metrics_df = get_top_activating_examples_df(
+    df["text"],
+    latent_df,
+    latent_metrics_df
+)
+#+END_SRC
+
+#+RESULTS:
+: None
+#+BEGIN_SRC python :session embedder_sae.org  :exports both
+topk_examples_by_metrics_df
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+                                                 nnz  ...                                            entropy
+0  FREE Drop-in Art Activities: Around the World\...  ...  Around Christmas-time I was foolish enough to ...
+1  You are creative and want to join an exciting ...  ...  Please register to participate in our discussi...
+2  Ideas for starting a local history habit?\nNov...  ...  Your Contribution Makes a Difference!\nACS Blo...
+3  Not sure where to start? Explore a selection o...  ...  Front page web articles\nOne of my favourite f...
+4  I’ve been doing fine art for about 32 years no...  ...  Member Sign in\nTwitter users can sign in with...
+5  Hi again! Thanks for stopping by to check out ...  ...  American Progressives United Party Promotes Wo...
+6  A free exhibition of work by local artists has...  ...  From a colleague developer's e-mail reply abou...
+7  Midwest Family History Expo and truly enjoyed ...  ...  ************YOU WILL NOT BE ABLE TO POST ANYWH...
+8  The party is finally here...\nJustina from La ...  ...  Couple of months ago, I assisted Clang in buil...
+9  Continuing our series of art work inspired by ...  ...  Register now to comment on articles, videos, a...
+
+[10 rows x 4 columns]
+#+end_example
