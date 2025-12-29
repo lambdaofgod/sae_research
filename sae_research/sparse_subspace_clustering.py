@@ -4,76 +4,95 @@ import numpy as np
 from scipy import sparse
 from sklearn.preprocessing import normalize
 from sklearn.cluster import SpectralClustering
-import tqdm
+import numba
+from tqdm import tqdm
 
 
-def compute_sparse_coefficients(X, k, batch_size):
-    n_samples, n_features = X.shape
-    rows, cols, data = [], [], []
+@numba.jit(nopython=True)
+def _compute_coefs_and_residual(y, Dictionary, support_arr, use_omp):
+    """Compute coefficients and residual for pursuit algorithms."""
+    if use_omp:
+        A = Dictionary[support_arr].T
+        coefs, _, _, _ = np.linalg.lstsq(A, y)
+        residual = y - A @ coefs
+    else:
+        atom = Dictionary[support_arr[-1]]
+        coef = np.dot(y, atom)
+        coefs = np.array([coef])
+        residual = y - coef * atom
+    return coefs, residual
 
-    for i_start in tqdm.trange(0, n_samples, batch_size):
-        i_end = min(i_start + batch_size, n_samples)
-        X_batch = X[i_start:i_end]
 
-        # 1. Batch Correlation: This is the expensive part, now vectorized!
-        # Result is (batch_size, n_samples)
-        correlations = np.abs(X_batch @ X.T)
+@numba.jit(nopython=True)
+def _compute_batch_coefficients(X, i_start, batch_size, k, use_omp, rows, cols, data):
+    """Compute sparse coefficients for a single batch."""
+    n_samples = X.shape[0]
+    i_end = min(i_start + batch_size, n_samples)
+    X_batch = X[i_start:i_end]
+    actual_batch_size = i_end - i_start
 
-        # 2. Mask self-representation (set diagonal-like entries to zero)
-        for b_idx in range(i_end - i_start):
-            correlations[b_idx, i_start + b_idx] = 0
+    # Batch correlation
+    correlations = np.abs(X_batch @ X.T)
 
-        # 3. Solve OMP for this batch
-        # We still iterate through atoms 1..k, but we do it for the whole batch
-        batch_coefs = solve_omp_batch(X_batch, X, correlations, k)
+    # Mask self-representation
+    for b_idx in range(actual_batch_size):
+        correlations[b_idx, i_start + b_idx] = 0
 
-        # 4. Store in sparse format
-        for b_idx, (idx_set, c_vals) in enumerate(batch_coefs):
-            rows.extend([i_start + b_idx] * len(idx_set))
-            cols.extend(idx_set)
-            data.extend(c_vals)
+    # Solve pursuit
+    support_out, coefs_out = solve_pursuit_batch(X_batch, X, correlations, k, use_omp)
+
+    # Store in pre-allocated arrays
+    for b_idx in range(actual_batch_size):
+        sample_idx = i_start + b_idx
+        offset = sample_idx * k
+        for j in range(k):
+            rows[offset + j] = sample_idx
+            cols[offset + j] = support_out[b_idx, j]
+            data[offset + j] = coefs_out[b_idx, j]
+
+
+def compute_sparse_coefficients(X, k, batch_size, use_omp=False):
+    n_samples = X.shape[0]
+
+    # Pre-allocate: each sample has k entries
+    rows = np.zeros(n_samples * k, dtype=np.int64)
+    cols = np.zeros(n_samples * k, dtype=np.int64)
+    data = np.zeros(n_samples * k, dtype=np.float64)
+
+    batch_starts = range(0, n_samples, batch_size)
+    for i_start in tqdm(batch_starts, desc="SSC batches"):
+        _compute_batch_coefficients(X, i_start, batch_size, k, use_omp, rows, cols, data)
 
     return sparse.csr_matrix((data, (rows, cols)), shape=(n_samples, n_samples))
 
 
-def solve_omp_batch(X_batch, Dictionary, correlations, k):
-    """
-    Refined helper to perform OMP.
-    While we still solve individual Least Squares,
-    the expensive 'search' for atoms is handled via the correlation matrix.
-    """
-    results = []
-    # For each signal in the batch, we find its k atoms
-    for b_idx in range(X_batch.shape[0]):
-        y = X_batch[b_idx]
-        corr = correlations[b_idx]
+@numba.jit(nopython=True, parallel=True)
+def solve_pursuit_batch(X_batch, Dictionary, correlations, k, use_omp=False):
+    """Matching Pursuit (use_omp=False) or Orthogonal MP (use_omp=True)."""
+    batch_size = X_batch.shape[0]
 
-        support = []
-        for _ in range(k):
-            # Pick best atom index
-            best_atom_idx = np.argmax(corr)
-            support.append(best_atom_idx)
-            # Mask this atom so it isn't picked again
-            corr[best_atom_idx] = 0
+    support_out = np.zeros((batch_size, k), dtype=np.int64)
+    coefs_out = np.zeros((batch_size, k), dtype=np.float64)
 
-            # Efficient Least Squares for small k
-            # Solve: min ||y - Dictionary[support] @ c||
-            # Dictionary[support] is (k, D). This is very fast.
-            A = Dictionary[support].T
-            c, _, _, _ = np.linalg.lstsq(A, y, rcond=None)
+    for b_idx in range(batch_size):
+        y = X_batch[b_idx].copy()
+        corr = correlations[b_idx].copy()
 
-            # Residual update (optional but technically required for OMP)
-            # In pure SSC-OMP, you can often just pick top-k correlations,
-            # but true OMP updates the residual to find the 'orthogonal' next atom.
-            residual = y - A @ c
-            # Update correlations for the next iteration
+        for i in range(k):
+            best_idx = np.argmax(corr)
+            support_out[b_idx, i] = best_idx
+            corr[best_idx] = 0
+
+            coefs, residual = _compute_coefs_and_residual(
+                y, Dictionary, support_out[b_idx, : i + 1], use_omp
+            )
+            coefs_out[b_idx, i] = coefs[-1]
+            y = residual
+
             corr = np.abs(residual @ Dictionary.T)
-            # Re-mask support and self
-            corr[support] = 0
-            # (Self-mask is already handled in the outer loop)
+            corr[support_out[b_idx, : i + 1]] = 0
 
-        results.append((support, c))
-    return results
+    return support_out, coefs_out
 
 
 def perform_spectral_clustering(C_sparse, n_clusters):
@@ -93,12 +112,13 @@ def perform_spectral_clustering(C_sparse, n_clusters):
 
 
 class SparseSubspaceClusteringOMP:
-    """Sparse Subspace Clustering using OMP (sklearn-style API)."""
+    """Sparse Subspace Clustering using Matching Pursuit or OMP (sklearn-style API)."""
 
-    def __init__(self, n_clusters, k=10, batch_size=1000):
+    def __init__(self, n_clusters, k=10, batch_size=1000, use_omp=False):
         self.n_clusters = n_clusters
         self.k = k
         self.batch_size = batch_size
+        self.use_omp = use_omp
         self.labels_ = None
         self._coefs = None
 
@@ -106,8 +126,10 @@ class SparseSubspaceClusteringOMP:
         # Step 1: Normalize
         X_norm = normalize(X, axis=1)
 
-        # Step 2: Compute Sparse Coefficients (OMP)
-        self._coefs = compute_sparse_coefficients(X_norm, self.k, self.batch_size)
+        # Step 2: Compute Sparse Coefficients
+        self._coefs = compute_sparse_coefficients(
+            X_norm, self.k, self.batch_size, self.use_omp
+        )
 
         # Step 3: Spectral Clustering
         self.labels_ = perform_spectral_clustering(self._coefs, self.n_clusters)
