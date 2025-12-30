@@ -112,7 +112,7 @@ def perform_spectral_clustering(C_sparse, n_clusters):
     sc = SpectralClustering(
         n_clusters=n_clusters,
         affinity="precomputed",
-        eigen_solver="arpack",  # Required for sparse efficiency
+        eigen_solver="amg",
         assign_labels="kmeans",
     )
     return sc.fit_predict(W)
@@ -121,7 +121,7 @@ def perform_spectral_clustering(C_sparse, n_clusters):
 class SparseSubspaceClusteringOMP:
     """Sparse Subspace Clustering using Matching Pursuit or OMP (sklearn-style API)."""
 
-    def __init__(self, n_clusters, k=10, batch_size=1000, use_omp=False):
+    def __init__(self, n_clusters, k=10, batch_size=1000, use_omp=True):
         self.n_clusters = n_clusters
         self.k = k
         self.batch_size = batch_size

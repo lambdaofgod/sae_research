@@ -102,7 +102,7 @@ f"Fit time: {time.time() - start:.3f}s"
 #+END_SRC
 
 #+RESULTS:
-: Fit time: 0.006s
+: Fit time: 0.012s
 
 
 #+BEGIN_SRC python :session ssc.org  :exports both
@@ -110,8 +110,8 @@ ssc.labels_
 #+END_SRC
 
 #+RESULTS:
-: array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0,
-:        0, 0, 0, 0, 0, 0, 0, 0], dtype=int32)
+: array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1,
+:        1, 1, 1, 1, 1, 1, 1, 1], dtype=int32)
 
 Since the ordering of labels doesn't mean anything, it means that SSC works. Another way to see it is to use Rand score
 
@@ -220,6 +220,28 @@ np.all(np.isclose(normed_diff, 0))
 #+RESULTS:
 : True
 
+
+*** Gotchas 
+:PROPERTIES:
+:CREATED:  <2025-12-30 Tue> [21:18]
+:END:
+
+The SSC algorithm is used to cluster /linear/ subspaces - it can fail if these subspaces do not pass through 0 (they are /affine/ subspaces).
+
+In practice though there is some evidence that this does not matter that much in high-dimensional settings, see [[cite:&you20_is_affin_const_needed_affin_subsp_clust]] where the authors show that the bigger the dimension of ambient space the less of a difference it makes.
+
+#+BEGIN_QUOTE 
+This paper shows, both the-
+oretically and empirically, that when the dimension of the
+ambient space is high relative to the sum of the dimensions
+of the affine subspaces, the affine constraint has a negligi-
+ble effect on clustering performance. Specifically, our anal-
+ysis provides conditions that guarantee the correctness of
+affine subspace clustering methods both with and without
+the affine constraint, and shows that these conditions are
+satisfied for high-dimensional data
+#+END_QUOTE
+
 *** More dimensions... 
 :PROPERTIES:
 :CREATED:  <2025-12-29 Mon> [19:24]
@@ -272,14 +294,21 @@ X_hd.shape, labels_hd.shape
 
 #+BEGIN_SRC python :session ssc.org  :exports both :async
 start = time.time()
-ssc_hd = SparseSubspaceClusteringOMP(3, k=25, batch_size=64).fit(X_hd)
-f"Fit time: {time.time() - start:.3f}s"
+ssc_hd = SparseSubspaceClusteringOMP(3, k=25, batch_size=64, use_omp=True).fit(X_hd)
+elapsed = time.time() - start
 #+END_SRC
 
 #+RESULTS:
-: /var/folders/t7/9zd9yqf17_zbfq2hwm8tv9ym0000gn/T/babel-dMQfgQ/python-FfXVOz
+: None
 
-#+BEGIN_SRC python :session ssc.org  :exports both
+#+BEGIN_SRC python :session ssc.org  :exports both :async
+f"Fit time: {int(elapsed // 60)}m {int(elapsed) % 60}s"
+#+END_SRC
+
+#+RESULTS:
+: Fit time: 14m 11s
+
+#+BEGIN_SRC python :session ssc.org  :exports both :async
 pd.Series(ssc_hd.labels_).value_counts()
 #+END_SRC
 
@@ -288,3 +317,4 @@ pd.Series(ssc_hd.labels_).value_counts()
 : 2     1000
 : 1     1000
 : Name: count, dtype: int64
+

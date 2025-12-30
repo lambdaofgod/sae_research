@@ -18,6 +18,7 @@ dependencies = [
     "nbformat>=5.10.4",
     "numba>=0.62.1",
     "pandas>=2.3.2",
+    "pyamg>=5.3.0",
     "sae-bench==0.4.2",
     "sae-lens==5.4.0",
     "scikit-learn>=1.7.1",
