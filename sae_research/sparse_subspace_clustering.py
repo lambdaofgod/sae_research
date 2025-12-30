@@ -9,18 +9,20 @@ from tqdm import tqdm
 
 
 @numba.jit(nopython=True)
-def _compute_coefs_and_residual(y, Dictionary, support_arr, use_omp):
+def _compute_coefs_and_residual(x_original, residual, Dictionary, support_arr, use_omp):
     """Compute coefficients and residual for pursuit algorithms."""
     if use_omp:
+        # OMP: solve lstsq against original signal
         A = Dictionary[support_arr].T
-        coefs, _, _, _ = np.linalg.lstsq(A, y)
-        residual = y - A @ coefs
+        coefs, _, _, _ = np.linalg.lstsq(A, x_original)
+        new_residual = x_original - A @ coefs
     else:
+        # MP: compute coefficient against current residual
         atom = Dictionary[support_arr[-1]]
-        coef = np.dot(y, atom)
+        coef = np.dot(residual, atom)
         coefs = np.array([coef])
-        residual = y - coef * atom
-    return coefs, residual
+        new_residual = residual - coef * atom
+    return coefs, new_residual
 
 
 @numba.jit(nopython=True)
@@ -61,12 +63,14 @@ def compute_sparse_coefficients(X, k, batch_size, use_omp=False):
 
     batch_starts = range(0, n_samples, batch_size)
     for i_start in tqdm(batch_starts, desc="SSC batches"):
-        _compute_batch_coefficients(X, i_start, batch_size, k, use_omp, rows, cols, data)
+        _compute_batch_coefficients(
+            X, i_start, batch_size, k, use_omp, rows, cols, data
+        )
 
     return sparse.csr_matrix((data, (rows, cols)), shape=(n_samples, n_samples))
 
 
-@numba.jit(nopython=True, parallel=True)
+@numba.jit(nopython=True)
 def solve_pursuit_batch(X_batch, Dictionary, correlations, k, use_omp=False):
     """Matching Pursuit (use_omp=False) or Orthogonal MP (use_omp=True)."""
     batch_size = X_batch.shape[0]
@@ -75,7 +79,8 @@ def solve_pursuit_batch(X_batch, Dictionary, correlations, k, use_omp=False):
     coefs_out = np.zeros((batch_size, k), dtype=np.float64)
 
     for b_idx in range(batch_size):
-        y = X_batch[b_idx].copy()
+        x_original = X_batch[b_idx].copy()
+        y = x_original.copy()
         corr = correlations[b_idx].copy()
 
         for i in range(k):
@@ -83,13 +88,15 @@ def solve_pursuit_batch(X_batch, Dictionary, correlations, k, use_omp=False):
             support_out[b_idx, i] = best_idx
             corr[best_idx] = 0
 
-            coefs, residual = _compute_coefs_and_residual(
-                y, Dictionary, support_out[b_idx, : i + 1], use_omp
+            coefs, y = _compute_coefs_and_residual(
+                x_original, y, Dictionary, support_out[b_idx, : i + 1], use_omp
             )
-            coefs_out[b_idx, i] = coefs[-1]
-            y = residual
+            if use_omp:
+                coefs_out[b_idx, : i + 1] = coefs
+            else:
+                coefs_out[b_idx, i] = coefs[-1]
 
-            corr = np.abs(residual @ Dictionary.T)
+            corr = np.abs(y @ Dictionary.T)
             corr[support_out[b_idx, : i + 1]] = 0
 
     return support_out, coefs_out
