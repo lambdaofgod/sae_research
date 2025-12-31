@@ -142,6 +142,45 @@ class SparseSubspaceClusteringOMP:
         self.labels_ = perform_spectral_clustering(self._coefs, self.n_clusters)
         return self
 
+    def recompute_clustering(self, n_clusters=None):
+        """Re-run spectral clustering using stored sparse coefficients.
+
+        This method allows re-clustering with a different number of clusters
+        without recomputing the expensive OMP sparse representation.
+        Returns a new instance without modifying the original.
+
+        Parameters
+        ----------
+        n_clusters : int, optional
+            Number of clusters. If None, uses the current n_clusters value.
+
+        Returns
+        -------
+        SparseSubspaceClusteringOMP
+            New instance with updated labels_ and shared _coefs.
+
+        Raises
+        ------
+        ValueError
+            If fit() has not been called yet (no stored coefficients).
+        """
+        if self._coefs is None:
+            raise ValueError(
+                "No sparse coefficients found. Call 'fit' before 'recompute_clustering'."
+            )
+
+        new_n_clusters = n_clusters if n_clusters is not None else self.n_clusters
+
+        new_instance = SparseSubspaceClusteringOMP(
+            n_clusters=new_n_clusters,
+            k=self.k,
+            batch_size=self.batch_size,
+            use_omp=self.use_omp
+        )
+        new_instance._coefs = self._coefs
+        new_instance.labels_ = perform_spectral_clustering(self._coefs, new_n_clusters)
+        return new_instance
+
     def fit_predict(self, X):
         self.fit(X)
         return self.labels_

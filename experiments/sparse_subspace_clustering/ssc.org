@@ -318,3 +318,189 @@ pd.Series(ssc_hd.labels_).value_counts()
 : 1     1000
 : Name: count, dtype: int64
 
+
+
+** SAE features 
+:PROPERTIES:
+:CREATED:  <2025-12-30 Tue> [21:31]
+:END:
+
+These use Goodfire SAE for Llama-3.1-8B Instruct
+
+#+BEGIN_SRC python :session ssc.org  :exports both :async
+from huggingface_hub import hf_hub_download
+import torch
+
+sae_name = "Llama-3.1-8B-Instruct-SAE-l19"
+file_path = hf_hub_download(
+    repo_id=f"Goodfire/{sae_name}",
+    filename=f"{sae_name}.pth",
+    repo_type="model"
+)
+sae_params = torch.load(
+    file_path, weights_only=True
+)
+sae_features_pt = sae_params["decoder_linear.weight"]
+sae_features_pt.shape
+#+END_SRC
+
+#+RESULTS:
+: torch.Size([4096, 65536])
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+feature_labels = pd.read_csv("goodfire_sae_labels.csv")
+feature_labels
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+       feature_index                                              label
+0                  1  Syntactical special characters and delimiters ...
+1                  2  The Russian word состав (composition/compilati...
+2                  3  Syntactical markers that introduce description...
+3                  4  The assistant is politely offering help using ...
+4                  5  Technical documentation describing widespread ...
+...              ...                                                ...
+45413          65526  Traditional fables and fairy tales, particular...
+45414          65527  Historical immigration to America and its cult...
+45415          65528  The assistant is explaining programming concep...
+45416          65530  Romance language grammar particles and connect...
+45417          65532  Detailed urban description and city-focused na...
+
+[45418 rows x 2 columns]
+#+end_example
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+sae_features_raw = sae_features_pt.T.cpu().numpy()
+#+END_SRC
+
+#+RESULTS:
+: None
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+feature_norm = pd.Series(np.linalg.norm(sae_features_raw, axis=1))
+sae_features = sae_features_raw[feature_norm >= 1e-3]
+sae_features.shape
+#+END_SRC
+
+#+RESULTS:
+| 45418 | 4096 |
+
+Ok so it seems like this number is consistent with what was used in interp-embed (apparently they also did the same filtering step)
+
+#+BEGIN_SRC python :session ssc.org  :exports both :async
+start = time.time()
+elapsed = time.time() - start
+#+END_SRC
+
+#+RESULTS:
+: Fit time: 4470.684s
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+goodfire_sae_ssc._coefs 
+#+END_SRC
+
+#+RESULTS:
+: <sae_research.sparse_subspace_clustering.SparseSubspaceClusteringOMP object at 0x131c1b5e0>
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+import pickle
+from pathlib import Path
+
+output_path = Path("data/goodfire_sae_ssc_coefs.pkl")
+if not output_path.exists():
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    goodfire_sae_ssc = SparseSubspaceClusteringOMP(50, k=25, batch_size=128).fit(sae_features)
+    with open(output_path, "wb") as f:
+        pickle.dump(goodfire_sae_ssc._coefs, f)
+    print(f"Saved to {output_path}")
+else:
+    goodfire_sae_ssc = SparseSubspaceClusteringOMP(50, k=25, batch_size=128)
+    with open(output_path, "rb") as f:
+        goodfire_sae_ssc._coefs = pickle.load( f)
+#+END_SRC
+
+#+RESULTS:
+: None
+
+#+BEGIN_SRC python :session ssc.org  :exports both :async
+start = time.time()
+goodfire_sae_ssc = goodfire_sae_ssc.recompute_clustering(200)
+elapsed = time.time() - start
+#+END_SRC
+
+#+RESULTS:
+: None
+
+#+BEGIN_SRC python :session ssc.org  :exports both :async
+f"Fit time: {int(elapsed // 60)}m {int(elapsed) % 60}s"
+#+END_SRC
+
+#+RESULTS:
+: Fit time: 0m 54s
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+feature_labels_with_clusters = feature_labels.copy().assign(cluster=goodfire_sae_ssc.labels_)
+feature_labels_with_clusters["cluster"].value_counts()
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+cluster
+75     7802
+5      2617
+150    2556
+3      2177
+78     1616
+       ... 
+25       23
+188      21
+41       20
+74       18
+13       17
+Name: count, Length: 200, dtype: int64
+#+end_example
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+feature_labels_with_clusters["cluster"].value_counts().describe()
+#+END_SRC
+
+#+RESULTS:
+: count     200.000000
+: mean      227.090000
+: std       637.833481
+: min        17.000000
+: 25%        47.000000
+: 50%        96.000000
+: 75%       190.500000
+: max      7802.000000
+: Name: count, dtype: float64
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+feature_labels_with_clusters[feature_labels_with_clusters["cluster"] == 1]
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+       feature_index                                              label  cluster
+221              262  The assistant is providing a structured multi-...        1
+931             1128   Carbon market mechanisms and trading instruments        1
+1711            2106       Words describing suffering, horror and chaos        1
+3057            4050      Volunteering and giving back to the community        1
+3123            4161  The assistant should explain and defend the sc...        1
+...              ...                                                ...      ...
+42133          60769  Environmental sustainability in industrial pro...        1
+42143          60781  Environmental sustainability and clean energy ...        1
+42227          60896  Comparative environmental impacts of energy so...        1
+42519          61313  Discussions of sustainability and environmenta...        1
+43610          62894        Future projections and timeline-based goals        1
+
+[73 rows x 3 columns]
+#+end_example
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+feature_labels_with_clusters.to_csv("goodfire_sae_labels_ssc_c200_k25.csv", index=False)
+#+END_SRC
+
+#+RESULTS:
+: None
