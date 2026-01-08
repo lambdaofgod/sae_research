@@ -15,7 +15,7 @@ Sparse subspace clustering tries to additionally minimize $\|C\|_0$, the number 
 import time
 import pandas as pd
 import numpy as np
-from sae_research.sparse_subspace_clustering import SparseSubspaceClusteringOMP
+from sae_research.feature_families import SparseSubspaceClusteringOMP, CosineSimilarityClustering 
 #+END_SRC
 
 #+RESULTS:
@@ -313,10 +313,7 @@ pd.Series(ssc_hd.labels_).value_counts()
 #+END_SRC
 
 #+RESULTS:
-: 0    10000
-: 2     1000
-: 1     1000
-: Name: count, dtype: int64
+: /var/folders/t7/9zd9yqf17_zbfq2hwm8tv9ym0000gn/T/babel-d7wG0u/python-udsQAW
 
 
 
@@ -388,13 +385,141 @@ sae_features.shape
 
 Ok so it seems like this number is consistent with what was used in interp-embed (apparently they also did the same filtering step)
 
+*** Simpler cosine-similarity based clustering 
+:PROPERTIES:
+:CREATED:  <2026-01-03 Sat> [18:20]
+:END:
+
+T = 0.1
+
 #+BEGIN_SRC python :session ssc.org  :exports both :async
 start = time.time()
+goodfire_sae_csc = CosineSimilarityClustering(threshold=0.5, n_clusters=300).fit(sae_features)
 elapsed = time.time() - start
 #+END_SRC
 
 #+RESULTS:
-: Fit time: 4470.684s
+: None
+
+#+BEGIN_SRC python :session ssc.org  :exports both :async
+pd.Series(goodfire_sae_csc.labels_).value_counts()
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+1     40368
+22      298
+16      259
+36      254
+5       242
+45      240
+48      223
+49      206
+7       198
+17      191
+44      186
+42      181
+8       179
+26      162
+37      160
+27      150
+35      146
+15      140
+47      140
+32      127
+39      125
+19      122
+11      121
+38      114
+4       112
+46      107
+20      103
+43       99
+30       73
+18       65
+9        60
+3        57
+28       51
+12       34
+10       33
+21       28
+23       25
+0        13
+14        4
+40        2
+6         2
+29        2
+34        2
+33        2
+41        2
+24        2
+2         2
+25        2
+13        2
+31        2
+Name: count, dtype: int64
+#+end_example
+
+T = 0.05
+#+BEGIN_SRC python :session ssc.org  :exports both :async
+goodfire_sae_csc = CosineSimilarityClustering(threshold=0.05).fit(sae_features)
+pd.Series(goodfire_sae_csc.labels_).value_counts()
+#+END_SRC
+
+#+RESULTS:
+: /var/folders/t7/9zd9yqf17_zbfq2hwm8tv9ym0000gn/T/babel-d7wG0u/python-m1QGbY
+
+
+T = 0.025
+#+BEGIN_SRC python :session ssc.org  :exports both :async
+goodfire_sae_csc = CosineSimilarityClustering(threshold=0.025).fit(sae_features)
+pd.Series(goodfire_sae_csc.labels_).value_counts()
+#+END_SRC
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+
+#+END_SRC
+
+#+BEGIN_SRC python :session ssc.org  :exports both :async
+f"Fit time: {int(elapsed // 60)}m {int(elapsed) % 60}s"
+#+END_SRC
+
+#+RESULTS:
+: Fit time: 10m 48s
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+pd.Series(goodfire_sae_csc.labels_).value_counts()
+#+END_SRC
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+example_sims = goodfire_sae_csc._thresholded_similarities[0].toarray().reshape(-1)
+#pd.Series(.describe()
+pd.Series(example_sims[example_sims > 0]).describe()
+#+END_SRC
+
+#+RESULTS:
+: count    16326.000000
+: mean         0.033812
+: std          0.028965
+: min          0.010000
+: 25%          0.016232
+: 50%          0.025014
+: 75%          0.040690
+: max          1.000001
+: dtype: float64
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+pd.Series(goodfire_sae_csc.labels_).value_counts()
+#+END_SRC
+
+#+RESULTS:
+: 0    45418
+: Name: count, dtype: int64
+
+*** Sparse Subspace Clustering 
+:PROPERTIES:
+:CREATED:  <2026-01-03 Sat> [18:20]
+:END:
 
 #+BEGIN_SRC python :session ssc.org  :exports both
 goodfire_sae_ssc._coefs 
@@ -403,19 +528,30 @@ goodfire_sae_ssc._coefs
 #+RESULTS:
 : <sae_research.sparse_subspace_clustering.SparseSubspaceClusteringOMP object at 0x131c1b5e0>
 
+We select these numbers so that their product approximately equals feature dimensionality
+
 #+BEGIN_SRC python :session ssc.org  :exports both
+n_clusters = 300
+k = 10
+#+END_SRC
+
+#+RESULTS:
+: None
+
+#+BEGIN_SRC python :session ssc.org  :exports both :async
 import pickle
 from pathlib import Path
 
-output_path = Path("data/goodfire_sae_ssc_coefs.pkl")
+goodfire_sae_ssc = SparseSubspaceClusteringOMP(n_clusters, k=k, batch_size=128)
+
+output_path = Path(f"data/goodfire_sae_ssc_coefs_k{k}.pkl")
 if not output_path.exists():
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    goodfire_sae_ssc = SparseSubspaceClusteringOMP(50, k=25, batch_size=128).fit(sae_features)
+    goodfire_sae_ssc.fit(sae_features)
     with open(output_path, "wb") as f:
         pickle.dump(goodfire_sae_ssc._coefs, f)
     print(f"Saved to {output_path}")
 else:
-    goodfire_sae_ssc = SparseSubspaceClusteringOMP(50, k=25, batch_size=128)
     with open(output_path, "rb") as f:
         goodfire_sae_ssc._coefs = pickle.load( f)
 #+END_SRC
@@ -424,9 +560,7 @@ else:
 : None
 
 #+BEGIN_SRC python :session ssc.org  :exports both :async
-start = time.time()
-goodfire_sae_ssc = goodfire_sae_ssc.recompute_clustering(200)
-elapsed = time.time() - start
+# goodfire_sae_ssc = goodfire_sae_ssc.recompute_clustering(200)
 #+END_SRC
 
 #+RESULTS:
@@ -437,7 +571,27 @@ f"Fit time: {int(elapsed // 60)}m {int(elapsed) % 60}s"
 #+END_SRC
 
 #+RESULTS:
-: Fit time: 0m 54s
+: Fit time: 0m 47s
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+pd.Series(goodfire_sae_ssc.labels_).value_counts()
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+206    11201
+6       2954
+245     2030
+86      1831
+99      1426
+       ...  
+16         9
+125        8
+65         8
+57         8
+142        7
+Name: count, Length: 300, dtype: int64
+#+end_example
 
 #+BEGIN_SRC python :session ssc.org  :exports both
 feature_labels_with_clusters = feature_labels.copy().assign(cluster=goodfire_sae_ssc.labels_)
@@ -447,18 +601,18 @@ feature_labels_with_clusters["cluster"].value_counts()
 #+RESULTS:
 #+begin_example
 cluster
-75     7802
-5      2617
-150    2556
-3      2177
-78     1616
-       ... 
-25       23
-188      21
-41       20
-74       18
-13       17
-Name: count, Length: 200, dtype: int64
+206    11201
+6       2954
+245     2030
+86      1831
+99      1426
+       ...  
+16         9
+125        8
+65         8
+57         8
+142        7
+Name: count, Length: 300, dtype: int64
 #+end_example
 
 #+BEGIN_SRC python :session ssc.org  :exports both
@@ -466,14 +620,14 @@ feature_labels_with_clusters["cluster"].value_counts().describe()
 #+END_SRC
 
 #+RESULTS:
-: count     200.000000
-: mean      227.090000
-: std       637.833481
-: min        17.000000
-: 25%        47.000000
-: 50%        96.000000
-: 75%       190.500000
-: max      7802.000000
+: count      300.000000
+: mean       151.393333
+: std        693.357971
+: min          7.000000
+: 25%         23.750000
+: 50%         43.000000
+: 75%        109.250000
+: max      11201.000000
 : Name: count, dtype: float64
 
 #+BEGIN_SRC python :session ssc.org  :exports both
@@ -483,24 +637,28 @@ feature_labels_with_clusters[feature_labels_with_clusters["cluster"] == 1]
 #+RESULTS:
 #+begin_example
        feature_index                                              label  cluster
-221              262  The assistant is providing a structured multi-...        1
-931             1128   Carbon market mechanisms and trading instruments        1
-1711            2106       Words describing suffering, horror and chaos        1
-3057            4050      Volunteering and giving back to the community        1
-3123            4161  The assistant should explain and defend the sc...        1
+40                49                    Offensive request from the user        1
+161              192      Nuanced disagreement with absolute statements        1
+227              269  Content restriction clauses in instruction pro...        1
+434              512  Markers of generic or low-quality content that...        1
+495              589  User requests for comma-separated list with no...        1
 ...              ...                                                ...      ...
-42133          60769  Environmental sustainability in industrial pro...        1
-42143          60781  Environmental sustainability and clean energy ...        1
-42227          60896  Comparative environmental impacts of energy so...        1
-42519          61313  Discussions of sustainability and environmenta...        1
-43610          62894        Future projections and timeline-based goals        1
+44511          64222  Expressions of limitation, inadequacy or falli...        1
+44593          64351  The assistant is correcting or being corrected...        1
+44708          64516  Narrative contradiction and expectation subver...        1
+44772          64608  Strong denial or defiance in confrontational d...        1
+44883          64753       Failure to take required or expected actions        1
 
-[73 rows x 3 columns]
+[219 rows x 3 columns]
 #+end_example
 
 #+BEGIN_SRC python :session ssc.org  :exports both
-feature_labels_with_clusters.to_csv("goodfire_sae_labels_ssc_c200_k25.csv", index=False)
+feature_labels_with_clusters.to_csv("goodfire_sae_labels_ssc_c300_k10.csv", index=False)
 #+END_SRC
 
 #+RESULTS:
 : None
+
+#+BEGIN_SRC python :session ssc.org  :exports both
+f
+#+END_SRC

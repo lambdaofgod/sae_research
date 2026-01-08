@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
-
 import numpy as np
 from scipy import sparse
 from sklearn.preprocessing import normalize
-from sklearn.cluster import SpectralClustering
 import numba
 from tqdm import tqdm
+from sae_research.feature_families.utils import perform_spectral_clustering
 
 
 @numba.jit(nopython=True)
@@ -102,22 +100,6 @@ def solve_pursuit_batch(X_batch, Dictionary, correlations, k, use_omp=False):
     return support_out, coefs_out
 
 
-def perform_spectral_clustering(C_sparse, n_clusters):
-    # Build Affinity Matrix: W = |C| + |C|^T
-    W = np.abs(C_sparse) + np.abs(C_sparse).T
-
-    # Use ARPACK solver - it never 'densifies' the matrix.
-    # It only performs matrix-vector multiplications (W * v),
-    # which is O(nnz) - extremely fast for sparse matrices.
-    sc = SpectralClustering(
-        n_clusters=n_clusters,
-        affinity="precomputed",
-        eigen_solver="amg",
-        assign_labels="kmeans",
-    )
-    return sc.fit_predict(W)
-
-
 class SparseSubspaceClusteringOMP:
     """Sparse Subspace Clustering using Matching Pursuit or OMP (sklearn-style API)."""
 
@@ -175,7 +157,7 @@ class SparseSubspaceClusteringOMP:
             n_clusters=new_n_clusters,
             k=self.k,
             batch_size=self.batch_size,
-            use_omp=self.use_omp
+            use_omp=self.use_omp,
         )
         new_instance._coefs = self._coefs
         new_instance.labels_ = perform_spectral_clustering(self._coefs, new_n_clusters)

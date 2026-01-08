@@ -264,3 +264,19 @@ Trenowanie tych SAE dla embedderów jest dosyć prosto osiągnąć za pomocą se
 :END:
 
 Bez dodania znormalizowanego MSE ten model zdawal sie nie bardzo czegos uczyc (okazalo sie to mega wazne bo np norma gradientu teraz nie jest jakas mikroskopijna)
+
+
+
+* Feature aggregation/subspaces 
+:PROPERTIES:
+:CREATED:  <2026-01-08 Thu> [15:21]
+:END:
+
+In experiments/sparse_subspace_clustering/ssc.org I experimented with the method from  [[id:db133c45-664d-4845-9c98-618336646582][Not All Language Model Features Are One-Dimensionally Linear]] and compared it to subspace clustering and the clusters/subspaces from SSC look better than the method from the paper
+
+** How to compare the feature families 
+:PROPERTIES:
+:CREATED:  <2026-01-08 Thu> [15:37]
+:END:
+
+- angles between subspaces
