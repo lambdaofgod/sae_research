@@ -65,7 +65,7 @@ class SAEFeatures(BaseModel):
         return cls(features=features, labels=labels)
 
 
-class GroupedSAEFeatures(BaseModel, SAEFeatures):
+class GroupedSAEFeatures(SAEFeatures, BaseModel):
     group_labels: np.ndarray  # shape: (n_features,)
 
     @model_validator(mode="after")
