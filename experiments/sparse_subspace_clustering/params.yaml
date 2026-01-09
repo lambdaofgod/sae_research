@@ -1,0 +1,17 @@
+# Data source configuration
+data:
+  sae_name: "Llama-3.1-8B-Instruct-SAE-l19"
+  labels_path: "goodfire_sae_labels.csv"
+  min_norm: 1e-3
+
+# Cosine Similarity Clustering
+csc:
+  thresholds: ["5e-1", "5e-2", "25e-3"]
+  n_clusters: 300
+  batch_size: 1024
+
+# Sparse Subspace Clustering (OMP)
+ssc:
+  n_clusters: 300
+  k_values: [10, 25]
+  batch_size: 128
