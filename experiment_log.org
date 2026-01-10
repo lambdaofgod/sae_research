@@ -280,3 +280,16 @@ In experiments/sparse_subspace_clustering/ssc.org I experimented with the method
 :END:
 
 - angles between subspaces
+
+** Experiments 
+:PROPERTIES:
+:CREATED:  <2026-01-10 Sat> [17:19]
+:END:
+
+*** sparse subspace clustering vs cosine similarity based clustering 
+:PROPERTIES:
+:CREATED:  <2026-01-10 Sat> [17:19]
+:END:
+
+In experiments/sparse_subspace_clustering I created a dvc pipeline that extracts clusters
+

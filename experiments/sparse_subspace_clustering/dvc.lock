@@ -1,0 +1,267 @@
+schema: '2.0'
+stages:
+  csc@0.5:
+    cmd: python scripts/run_csc.py --threshold 0.5
+    deps:
+    - path: goodfire_sae_labels.csv
+      hash: md5
+      md5: 3ac74c708c865ed908dace3c05212c54
+      size: 3011273
+    - path: scripts/run_csc.py
+      hash: md5
+      md5: 9bf5149db7aa1b87fde57792cc4ea152
+      size: 1399
+    params:
+      params.yaml:
+        csc.batch_size: 1024
+        csc.n_clusters: 300
+        data:
+          sae_name: Llama-3.1-8B-Instruct-SAE-l19
+          labels_path: goodfire_sae_labels.csv
+          min_norm: 0.001
+    outs:
+    - path: results/csc/csc_T0.5.csv
+      hash: md5
+      md5: 223de475dcdcac1d882ca4a12088d44d
+      size: 3108895
+  csc_cc@0.5:
+    cmd: python scripts/run_csc.py --threshold 0.5 --mode cc
+    deps:
+    - path: goodfire_sae_labels.csv
+      hash: md5
+      md5: 3ac74c708c865ed908dace3c05212c54
+      size: 3011273
+    - path: scripts/run_csc.py
+      hash: md5
+      md5: a3d08af16f3dab7e3194db0868383c86
+      size: 1738
+    params:
+      params.yaml:
+        csc.batch_size: 1024
+        data:
+          sae_name: Llama-3.1-8B-Instruct-SAE-l19
+          labels_path: goodfire_sae_labels.csv
+          min_norm: 0.001
+    outs:
+    - path: results/csc/csc_cc_T0.5.csv
+      hash: md5
+      md5: e5364a1d052008999fe0171b99235aad
+      size: 3217644
+  csc_cc@0.05:
+    cmd: python scripts/run_csc.py --threshold 0.05 --mode cc
+    deps:
+    - path: goodfire_sae_labels.csv
+      hash: md5
+      md5: 3ac74c708c865ed908dace3c05212c54
+      size: 3011273
+    - path: scripts/run_csc.py
+      hash: md5
+      md5: a3d08af16f3dab7e3194db0868383c86
+      size: 1738
+    params:
+      params.yaml:
+        csc.batch_size: 1024
+        data:
+          sae_name: Llama-3.1-8B-Instruct-SAE-l19
+          labels_path: goodfire_sae_labels.csv
+          min_norm: 0.001
+    outs:
+    - path: results/csc/csc_cc_T0.05.csv
+      hash: md5
+      md5: 8f56fed6cd64dbc724f327a0ef1c397f
+      size: 3102117
+  csc_cc@0.025:
+    cmd: python scripts/run_csc.py --threshold 0.025 --mode cc
+    deps:
+    - path: goodfire_sae_labels.csv
+      hash: md5
+      md5: 3ac74c708c865ed908dace3c05212c54
+      size: 3011273
+    - path: scripts/run_csc.py
+      hash: md5
+      md5: a3d08af16f3dab7e3194db0868383c86
+      size: 1738
+    params:
+      params.yaml:
+        csc.batch_size: 1024
+        data:
+          sae_name: Llama-3.1-8B-Instruct-SAE-l19
+          labels_path: goodfire_sae_labels.csv
+          min_norm: 0.001
+    outs:
+    - path: results/csc/csc_cc_T0.025.csv
+      hash: md5
+      md5: 8f56fed6cd64dbc724f327a0ef1c397f
+      size: 3102117
+  csc_spectral@0.5:
+    cmd: python scripts/run_csc.py --threshold 0.5 --mode spectral
+    deps:
+    - path: goodfire_sae_labels.csv
+      hash: md5
+      md5: 3ac74c708c865ed908dace3c05212c54
+      size: 3011273
+    - path: scripts/run_csc.py
+      hash: md5
+      md5: a3d08af16f3dab7e3194db0868383c86
+      size: 1738
+    params:
+      params.yaml:
+        csc.batch_size: 1024
+        csc.n_clusters: 300
+        data:
+          sae_name: Llama-3.1-8B-Instruct-SAE-l19
+          labels_path: goodfire_sae_labels.csv
+          min_norm: 0.001
+    outs:
+    - path: results/csc/csc_spectral_T0.5.csv
+      hash: md5
+      md5: 1a8a1d5d4c1875f5c3a0eecca0e2a2da
+      size: 3105465
+  csc_spectral@0.05:
+    cmd: python scripts/run_csc.py --threshold 0.05 --mode spectral
+    deps:
+    - path: goodfire_sae_labels.csv
+      hash: md5
+      md5: 3ac74c708c865ed908dace3c05212c54
+      size: 3011273
+    - path: scripts/run_csc.py
+      hash: md5
+      md5: a3d08af16f3dab7e3194db0868383c86
+      size: 1738
+    params:
+      params.yaml:
+        csc.batch_size: 1024
+        csc.n_clusters: 300
+        data:
+          sae_name: Llama-3.1-8B-Instruct-SAE-l19
+          labels_path: goodfire_sae_labels.csv
+          min_norm: 0.001
+    outs:
+    - path: results/csc/csc_spectral_T0.05.csv
+      hash: md5
+      md5: 1448da44e5e3358663b4179364ed5f9c
+      size: 3178977
+  csc_spectral@0.025:
+    cmd: python scripts/run_csc.py --threshold 0.025 --mode spectral
+    deps:
+    - path: goodfire_sae_labels.csv
+      hash: md5
+      md5: 3ac74c708c865ed908dace3c05212c54
+      size: 3011273
+    - path: scripts/run_csc.py
+      hash: md5
+      md5: a3d08af16f3dab7e3194db0868383c86
+      size: 1738
+    params:
+      params.yaml:
+        csc.batch_size: 1024
+        csc.n_clusters: 300
+        data:
+          sae_name: Llama-3.1-8B-Instruct-SAE-l19
+          labels_path: goodfire_sae_labels.csv
+          min_norm: 0.001
+    outs:
+    - path: results/csc/csc_spectral_T0.025.csv
+      hash: md5
+      md5: 62f4e7e78b4b822d425b3c34298a5a2c
+      size: 3174522
+  ssc_coefficients@10:
+    cmd: python scripts/run_ssc_coefs.py --k 10
+    deps:
+    - path: goodfire_sae_labels.csv
+      hash: md5
+      md5: 3ac74c708c865ed908dace3c05212c54
+      size: 3011273
+    - path: scripts/run_ssc_coefs.py
+      hash: md5
+      md5: 9650c637a9805eb26af6c930116f611d
+      size: 1382
+    params:
+      params.yaml:
+        data:
+          sae_name: Llama-3.1-8B-Instruct-SAE-l19
+          labels_path: goodfire_sae_labels.csv
+          min_norm: 0.001
+        ssc.batch_size: 128
+    outs:
+    - path: data/ssc_coefs/coefs_k10.pkl
+      hash: md5
+      md5: 1084d156a5d0ed7c6cfa1f6a91eeeddb
+      size: 5632267
+  ssc_coefficients@25:
+    cmd: python scripts/run_ssc_coefs.py --k 25
+    deps:
+    - path: goodfire_sae_labels.csv
+      hash: md5
+      md5: 3ac74c708c865ed908dace3c05212c54
+      size: 3011273
+    - path: scripts/run_ssc_coefs.py
+      hash: md5
+      md5: 9650c637a9805eb26af6c930116f611d
+      size: 1382
+    params:
+      params.yaml:
+        data:
+          sae_name: Llama-3.1-8B-Instruct-SAE-l19
+          labels_path: goodfire_sae_labels.csv
+          min_norm: 0.001
+        ssc.batch_size: 128
+    outs:
+    - path: data/ssc_coefs/coefs_k25.pkl
+      hash: md5
+      md5: 1cfc1be16cb90d2179648e2b2d09b892
+      size: 13807507
+  ssc_clustering@10:
+    cmd: python scripts/run_ssc_clustering.py --k 10
+    deps:
+    - path: data/ssc_coefs/coefs_k10.pkl
+      hash: md5
+      md5: 1084d156a5d0ed7c6cfa1f6a91eeeddb
+      size: 5632267
+    - path: goodfire_sae_labels.csv
+      hash: md5
+      md5: 3ac74c708c865ed908dace3c05212c54
+      size: 3011273
+    - path: scripts/run_ssc_clustering.py
+      hash: md5
+      md5: f9db09cf3479a81c3356a113225219de
+      size: 1696
+    params:
+      params.yaml:
+        data:
+          sae_name: Llama-3.1-8B-Instruct-SAE-l19
+          labels_path: goodfire_sae_labels.csv
+          min_norm: 0.001
+        ssc.n_clusters: 300
+    outs:
+    - path: results/ssc/ssc_k10.csv
+      hash: md5
+      md5: 8cb0ac48223b92772e911fd2bc6243a8
+      size: 3177530
+  ssc_clustering@25:
+    cmd: python scripts/run_ssc_clustering.py --k 25
+    deps:
+    - path: data/ssc_coefs/coefs_k25.pkl
+      hash: md5
+      md5: 1cfc1be16cb90d2179648e2b2d09b892
+      size: 13807507
+    - path: goodfire_sae_labels.csv
+      hash: md5
+      md5: 3ac74c708c865ed908dace3c05212c54
+      size: 3011273
+    - path: scripts/run_ssc_clustering.py
+      hash: md5
+      md5: f9db09cf3479a81c3356a113225219de
+      size: 1696
+    params:
+      params.yaml:
+        data:
+          sae_name: Llama-3.1-8B-Instruct-SAE-l19
+          labels_path: goodfire_sae_labels.csv
+          min_norm: 0.001
+        ssc.n_clusters: 300
+    outs:
+    - path: results/ssc/ssc_k25.csv
+      hash: md5
+      md5: e1704e4b9726e6821640848ae204388e
+      size: 3184592

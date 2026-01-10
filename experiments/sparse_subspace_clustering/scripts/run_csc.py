@@ -9,12 +9,16 @@ from sae_research.feature_families import CosineSimilarityClustering
 from sae_research.sae_features import SAEFeatures
 
 
-def main(threshold: str) -> None:
-    """Run CSC with a given threshold.
+def main(threshold: str, mode: str) -> None:
+    """Run CSC with a given threshold and mode.
 
     Args:
-        threshold: Threshold value as scientific notation string (e.g., "5e-2")
+        threshold: Threshold value as string (e.g., "0.05")
+        mode: Clustering mode - "cc" for connected components, "spectral" for spectral clustering
     """
+    if mode not in ("cc", "spectral"):
+        raise ValueError(f"mode must be 'cc' or 'spectral', got '{mode}'")
+
     params = dvc.api.params_show()
     data_params = params["data"]
     csc_params = params["csc"]
@@ -28,9 +32,11 @@ def main(threshold: str) -> None:
 
     # Run CSC
     threshold_float = float(threshold)
+    n_clusters = csc_params["n_clusters"] if mode == "spectral" else None
+
     csc = CosineSimilarityClustering(
         threshold=threshold_float,
-        n_clusters=csc_params["n_clusters"],
+        n_clusters=n_clusters,
         batch_size=csc_params["batch_size"],
     )
     csc.fit(sae_features.features)
@@ -39,11 +45,12 @@ def main(threshold: str) -> None:
     output_dir = Path("results/csc")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_path = output_dir / f"csc_T{threshold}.csv"
+    output_path = output_dir / f"csc_{mode}_T{threshold}.csv"
     result_df = sae_features.labels.copy()
     result_df["cluster"] = csc.labels_
     result_df.to_csv(output_path, index=False)
 
+    print(f"Mode: {mode}, n_clusters: {csc.n_clusters_}")
     print(f"Saved {len(result_df)} features to {output_path}")
 
 

@@ -1,10 +1,23 @@
 # DVC Pipeline for Sparse Subspace Clustering Experiments
 
 stages:
-  csc:
+  csc_cc:
     foreach: ${csc.thresholds}
     do:
-      cmd: python scripts/run_csc.py --threshold ${item}
+      cmd: python scripts/run_csc.py --threshold ${item} --mode cc
+      deps:
+        - scripts/run_csc.py
+        - goodfire_sae_labels.csv
+      params:
+        - data
+        - csc.batch_size
+      outs:
+        - results/csc/csc_cc_T${item}.csv
+
+  csc_spectral:
+    foreach: ${csc.thresholds}
+    do:
+      cmd: python scripts/run_csc.py --threshold ${item} --mode spectral
       deps:
         - scripts/run_csc.py
         - goodfire_sae_labels.csv
@@ -13,7 +26,7 @@ stages:
         - csc.n_clusters
         - csc.batch_size
       outs:
-        - results/csc/csc_T${item}.csv
+        - results/csc/csc_spectral_T${item}.csv
 
   ssc_coefficients:
     foreach: ${ssc.k_values}
