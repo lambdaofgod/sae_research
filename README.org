@@ -1,0 +1,52 @@
+#+title: Readme
+
+* SAE Experiments
+:PROPERTIES:
+:CREATED:  <2026-03-23 pon> [14:10]
+:END:
+
+** This repository and dictionary learning as of <2026-03-23>
+:PROPERTIES:
+:CREATED:  <2026-03-23 pon> [14:11]
+:END:
+
+*** Core idea
+
+We take pretrained SAE decoder matrices and apply sparse coding algorithms (from dictionary learning literature) as an alternative to the learned encoder. Since the decoder is just a matrix multiply, greedy/thresholding algorithms with theoretical guarantees (RIP, mutual coherence) can be used to find sparse representations and control sparsity at inference time without retraining.
+
+*** Custom SAE architectures
+
+- *ThresholdingAutoEncoderTopK* (~sae_research/thresholding_sae.py~) :: Hard top-k on ~(x - b_dec) @ W_dec~, single decoder matrix for encode+decode. Also has a nested variant (~NestedThresholdingAutoEncoderTopK~) supporting multiple k values trained simultaneously with weighted losses.
+
+- *InstanceHardThresholdingPursuitSAE* (~sae_research/instance_sae.py~) :: Instance-level support (union of top-k across tokens), then sparse least squares solve on that support.
+
+- *MPSAE* (Matching Pursuit) (~sae_research/instance_sae.py~) :: Greedy iterative algorithm: pick max-correlation feature with residual, update residual, repeat for S steps.
+
+*** Training code (fork)
+
+The training code lives in =../forks/dictionary_learning_demo/= (fork of =adamkarvonen/dictionary_learning_demo=, 2 commits ahead of upstream):
+
+- =thresholding_sae.py= :: ~ThresholdingTopKTrainer~ and ~NestedThresholdingTopKTrainer~
+- =matching_pursuit_sae.py= :: ~MatchingPursuitTrainer~ and ~NestedMatchingPursuitTrainer~
+- =stiefel_sae.py= :: Experimental: decoder weights constrained to Stiefel manifold (orthonormal rows) via =geoopt= Riemannian optimization
+- =demo_config.py= :: Updated with new ~TrainerType~ enums and configs
+
+*** Inference and evaluation code (this repo)
+
+The =sae_research/= package contains inference-side code:
+
+- =thresholding_sae.py= :: Autoencoder classes (no trainer, inference only)
+- =instance_sae.py= :: IHTP and MPSAE classes + loaders (~load_from_sae_lens~, ~load_dictionary_learning_instance_sae~)
+- =modules.py= :: Reusable building blocks: ~HardThresholdingSupportSelector~, ~SparseLeastSquares~, ~HardThresholding~
+- =dictionary_learning_adapters.py= :: ~NestedThresholdingTopKSAE~ wrapper for sae_bench compatibility
+
+*** Trained models
+
+In =dictionary_learning_saes/= there are nested thresholding top-k SAEs with ~k_values = [20, 40, 80, 160, 320]~:
+
+- Pythia 70M layer 3
+- Gemma 2 2B layers 11 and 12 (including a 200M token test variant)
+
+*** SAE Bench integration
+
+=sae_bench_demo.py= shows how to plug IHTP and MPSAE into sae_bench evaluation. Key finding: instance-level pursuit achieves much lower per-instance L0 than standard SAE encoding while keeping reconstruction loss comparable.
