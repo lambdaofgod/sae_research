@@ -1,52 +1,33 @@
-#+title: Readme
+#+title: SAE Research
 
-* SAE Experiments
-:PROPERTIES:
-:CREATED:  <2026-03-23 pon> [14:10]
-:END:
+* Overview
 
-** This repository and dictionary learning as of <2026-03-23>
-:PROPERTIES:
-:CREATED:  <2026-03-23 pon> [14:11]
-:END:
+Apply sparse coding / dictionary learning algorithms to pretrained SAE decoder matrices — greedy/thresholding methods with theoretical guarantees (RIP, mutual coherence) to control sparsity at inference time without retraining.
 
-*** Core idea
+* Experiment threads
 
-We take pretrained SAE decoder matrices and apply sparse coding algorithms (from dictionary learning literature) as an alternative to the learned encoder. Since the decoder is just a matrix multiply, greedy/thresholding algorithms with theoretical guarantees (RIP, mutual coherence) can be used to find sparse representations and control sparsity at inference time without retraining.
+| Thread                                          | When    | Status | Details                                                      |
+|-------------------------------------------------+---------+--------+--------------------------------------------------------------|
+| Decoder matrix orthogonality                    | 2025-09 |        | [[file:SAE_EXPERIMENTS.org::*Decoder matrix orthogonality]]  |
+| Thresholding pursuit                            | 2025-10 |        | [[file:experiment_log.org::*Thresholding pursuit]]           |
+| SAE Bench integration                           | 2025-10 |        | [[file:experiment_log.org::*SAEBench]]                       |
+| MPSAE (matching pursuit)                        | 2025-10 |        | [[file:experiment_log.org::*MPSAE]]                          |
+| Training custom SAEs (dictionary_learning fork) | 2025-10 | DONE   | [[file:experiment_log.org::*Training custom SAEs]]           |
+| Quasi-orthogonal / algebraic geometry           | 2025-10 |        | [[file:SAE_EXPERIMENTS.org::*quasi-orthogonal]]              |
+| Embedder SAE                                    | 2025-11 |        | [[file:SAE_EXPERIMENTS.org::*Embedder SAE]]                  |
+| Feature aggregation/subspaces (SSC)             | 2026-01 |        | [[file:SAE_EXPERIMENTS.org::*Feature aggregation/subspaces]] |
 
-*** Custom SAE architectures
+* Repository layout
 
-- *ThresholdingAutoEncoderTopK* (~sae_research/thresholding_sae.py~) :: Hard top-k on ~(x - b_dec) @ W_dec~, single decoder matrix for encode+decode. Also has a nested variant (~NestedThresholdingAutoEncoderTopK~) supporting multiple k values trained simultaneously with weighted losses.
+- =sae_research/= — Python package: inference-side SAE classes, modules, adapters, loaders
+- =dictionary_learning_saes/= — Trained nested thresholding top-k SAE checkpoints
+- =experiments/= — Subdirectories for specific experiments (sae_bench, embedder_sae, SSC, etc.)
+- =../forks/dictionary_learning_demo/= — Fork of adamkarvonen/dictionary_learning_demo with custom trainers
 
-- *InstanceHardThresholdingPursuitSAE* (~sae_research/instance_sae.py~) :: Instance-level support (union of top-k across tokens), then sparse least squares solve on that support.
+* Theory and ideas
 
-- *MPSAE* (Matching Pursuit) (~sae_research/instance_sae.py~) :: Greedy iterative algorithm: pick max-correlation feature with residual, update residual, repeat for S steps.
+See [[file:SAE_EXPERIMENTS.org][SAE_EXPERIMENTS.org]]
 
-*** Training code (fork)
+* Experiment log
 
-The training code lives in =../forks/dictionary_learning_demo/= (fork of =adamkarvonen/dictionary_learning_demo=, 2 commits ahead of upstream):
-
-- =thresholding_sae.py= :: ~ThresholdingTopKTrainer~ and ~NestedThresholdingTopKTrainer~
-- =matching_pursuit_sae.py= :: ~MatchingPursuitTrainer~ and ~NestedMatchingPursuitTrainer~
-- =stiefel_sae.py= :: Experimental: decoder weights constrained to Stiefel manifold (orthonormal rows) via =geoopt= Riemannian optimization
-- =demo_config.py= :: Updated with new ~TrainerType~ enums and configs
-
-*** Inference and evaluation code (this repo)
-
-The =sae_research/= package contains inference-side code:
-
-- =thresholding_sae.py= :: Autoencoder classes (no trainer, inference only)
-- =instance_sae.py= :: IHTP and MPSAE classes + loaders (~load_from_sae_lens~, ~load_dictionary_learning_instance_sae~)
-- =modules.py= :: Reusable building blocks: ~HardThresholdingSupportSelector~, ~SparseLeastSquares~, ~HardThresholding~
-- =dictionary_learning_adapters.py= :: ~NestedThresholdingTopKSAE~ wrapper for sae_bench compatibility
-
-*** Trained models
-
-In =dictionary_learning_saes/= there are nested thresholding top-k SAEs with ~k_values = [20, 40, 80, 160, 320]~:
-
-- Pythia 70M layer 3
-- Gemma 2 2B layers 11 and 12 (including a 200M token test variant)
-
-*** SAE Bench integration
-
-=sae_bench_demo.py= shows how to plug IHTP and MPSAE into sae_bench evaluation. Key finding: instance-level pursuit achieves much lower per-instance L0 than standard SAE encoding while keeping reconstruction loss comparable.
+See [[file:experiment_log.org][experiment_log.org]]
