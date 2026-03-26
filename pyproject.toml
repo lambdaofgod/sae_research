@@ -31,6 +31,9 @@ dependencies = [
     "tabulate>=0.9.0",
     "trackio==0.5.0",
     "transformer-lens>=2.16.1",
+    "einops>=0.7.0",
+    "jaxtyping>=0.2.0",
+    "zstandard>=0.22.0",
 ]
 
 [dependency-groups]
@@ -45,7 +48,7 @@ find_sae_bench_models = "scripts.cli:main"
 packages = ["sae_research"]
 
 [tool.uv.sources]
-dictionary-learning = { git = "https://github.com/saprmarks/dictionary_learning" }
+dictionary-learning = { git = "https://github.com/saprmarks/dictionary_learning", rev = "1d2737a" }
 
 [tool.uv.workspace]
 members = ["ARENA_tutorials"]

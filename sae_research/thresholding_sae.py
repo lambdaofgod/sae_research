@@ -3,14 +3,20 @@ Implements the SAE training scheme from https://arxiv.org/abs/2406.04093.
 Significant portions of this code have been copied from https://github.com/EleutherAI/sae/blob/main/sae
 """
 
+import einops
 import torch as t
 import torch.nn as nn
+from collections import namedtuple
 from typing import Optional, Dict, Tuple, Union
-from jaxtyping import Float, Int
+from jaxtyping import Float, Int, Bool
 
+from dictionary_learning.config import DEBUG
 from dictionary_learning.dictionary import Dictionary
 from dictionary_learning.trainers.trainer import (
+    SAETrainer,
+    get_lr_schedule,
     set_decoder_norm_to_unit_norm,
+    remove_gradient_parallel_to_decoder_directions,
 )
 
 # SAE inputs are pre-flattened: (batch, seq, activation_dim) -> (n_tokens, activation_dim)
@@ -168,7 +174,13 @@ class ThresholdingAutoEncoderTopK(Dictionary, nn.Module):
         """
         Load a pretrained autoencoder from a file.
         """
-        state_dict = t.load(path)
+        checkpoint = t.load(path, map_location='cpu')
+
+        # Handle both raw state_dict and training checkpoint formats
+        if 'ae' in checkpoint:
+            state_dict = checkpoint['ae']
+        else:
+            state_dict = checkpoint
 
         # Handle backward compatibility - check for encoder weights in old format
         if "encoder.weight" in state_dict:
@@ -357,3 +369,438 @@ class NestedThresholdingAutoEncoderTopK(ThresholdingAutoEncoderTopK):
         if device is not None:
             autoencoder.to(device)
         return autoencoder
+
+
+class ThresholdingTopKTrainer(SAETrainer):
+    """
+    Hard thresholding Top-K SAE training scheme.
+
+    Trains a sparse autoencoder using hard thresholding with a single decoder matrix,
+    selecting features based on absolute activation values while preserving signs.
+    """
+
+    def __init__(
+        self,
+        steps: int,  # total number of steps to train for
+        activation_dim: int,
+        dict_size: int,
+        k: int,
+        layer: int,
+        lm_name: str,
+        dict_class: type = ThresholdingAutoEncoderTopK,
+        lr: Optional[float] = None,
+        auxk_alpha: float = 1 / 32,  # see Appendix A.2
+        warmup_steps: int = 1000,
+        decay_start: Optional[int] = None,  # when does the lr decay start
+        threshold_beta: float = 0.999,
+        threshold_start_step: int = 1000,
+        seed: Optional[int] = None,
+        device: Optional[str] = None,
+        wandb_name: str = "ThresholdingAutoEncoderTopK",
+        submodule_name: Optional[str] = None,
+    ):
+        super().__init__(seed)
+
+        assert layer is not None and lm_name is not None
+        self.layer = layer
+        self.lm_name = lm_name
+        self.submodule_name = submodule_name
+
+        self.wandb_name = wandb_name
+        self.steps = steps
+        self.decay_start = decay_start
+        self.warmup_steps = warmup_steps
+        self.k = k
+        self.threshold_beta = threshold_beta
+        self.threshold_start_step = threshold_start_step
+
+        if seed is not None:
+            t.manual_seed(seed)
+            t.cuda.manual_seed_all(seed)
+
+        # Initialise autoencoder
+        self.ae = dict_class(activation_dim, dict_size, k)
+        if device is None:
+            self.device = "cuda" if t.cuda.is_available() else "cpu"
+        else:
+            self.device = device
+        self.ae.to(self.device)
+
+        if lr is not None:
+            self.lr = lr
+        else:
+            # Auto-select LR using 1 / sqrt(d) scaling law from Figure 3 of the paper
+            scale = dict_size / (2**14)
+            self.lr = 2e-4 / scale**0.5
+
+        self.auxk_alpha = auxk_alpha
+        self.dead_feature_threshold = 10_000_000
+        self.top_k_aux = activation_dim // 2  # Heuristic from B.1 of the paper
+        self.num_tokens_since_fired = t.zeros(dict_size, dtype=t.long, device=device)
+        self.logging_parameters = [
+            "effective_l0",
+            "dead_features",
+            "pre_norm_auxk_loss",
+        ]
+        self.effective_l0 = -1
+        self.dead_features = -1
+        self.pre_norm_auxk_loss = -1
+
+        # Optimizer and scheduler
+        self.optimizer = t.optim.Adam(
+            self.ae.parameters(), lr=self.lr, betas=(0.9, 0.999)
+        )
+
+        lr_fn = get_lr_schedule(steps, warmup_steps, decay_start=decay_start)
+
+        self.scheduler = t.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_fn)
+
+    def get_auxiliary_loss(
+        self,
+        residual_BD: Float[t.Tensor, "n_tokens activation_dim"],
+        feat_acts_BF: Float[t.Tensor, "n_tokens dict_size"],
+    ) -> Float[t.Tensor, ""]:
+        dead_features = self.num_tokens_since_fired >= self.dead_feature_threshold
+        self.dead_features = int(dead_features.sum())
+
+        if self.dead_features > 0:
+            k_aux = min(self.top_k_aux, self.dead_features)
+
+            # For hard thresholding, we work with absolute values for selection
+            abs_acts_BF = t.abs(feat_acts_BF)
+            auxk_latents = t.where(dead_features[None], abs_acts_BF, -t.inf)
+
+            # Top-k dead latents based on absolute values
+            auxk_abs_acts, auxk_indices = auxk_latents.topk(k_aux, sorted=False)
+
+            # Get the actual signed values at these indices
+            auxk_acts = feat_acts_BF.gather(-1, auxk_indices)
+
+            auxk_buffer_BF = t.zeros_like(feat_acts_BF)
+            auxk_acts_BF = auxk_buffer_BF.scatter_(
+                dim=-1, index=auxk_indices, src=auxk_acts
+            )
+
+            # Note: decoder(), not decode(), as we don't want to apply the bias
+            x_reconstruct_aux = self.ae.decoder(auxk_acts_BF)
+            l2_loss_aux = (
+                (residual_BD.float() - x_reconstruct_aux.float())
+                .pow(2)
+                .sum(dim=-1)
+                .mean()
+            )
+
+            self.pre_norm_auxk_loss = l2_loss_aux
+
+            # normalization from OpenAI implementation: https://github.com/openai/sparse_autoencoder/blob/main/sparse_autoencoder/kernels.py#L614
+            residual_mu = residual_BD.mean(dim=0)[None, :].broadcast_to(
+                residual_BD.shape
+            )
+            loss_denom = (
+                (residual_BD.float() - residual_mu.float()).pow(2).sum(dim=-1).mean()
+            )
+            normalized_auxk_loss = l2_loss_aux / loss_denom
+
+            return normalized_auxk_loss.nan_to_num(0.0)
+        else:
+            self.pre_norm_auxk_loss = -1
+            return t.tensor(0, dtype=residual_BD.dtype, device=residual_BD.device)
+
+    def update_threshold(self, top_acts_BK: Float[t.Tensor, "n_tokens k"]) -> None:
+        device_type = "cuda" if top_acts_BK.is_cuda else "cpu"
+        with t.autocast(device_type=device_type, enabled=False), t.no_grad():
+            # For hard thresholding, we work with absolute values
+            active = t.abs(top_acts_BK).clone().detach()
+            active[active == 0] = float("inf")  # Exclude exact zeros
+            min_activations = active.min(dim=1).values.to(dtype=t.float32)
+            min_activation = min_activations.mean()
+
+            B, K = active.shape
+            assert len(active.shape) == 2
+            assert min_activations.shape == (B,)
+
+            if self.ae.threshold < 0:
+                self.ae.threshold = min_activation
+            else:
+                self.ae.threshold = (self.threshold_beta * self.ae.threshold) + (
+                    (1 - self.threshold_beta) * min_activation
+                )
+
+    def loss(
+        self,
+        x: Float[t.Tensor, "n_tokens activation_dim"],
+        step: Optional[int] = None,
+        logging: bool = False,
+    ) -> Union[Float[t.Tensor, ""], namedtuple]:
+        # Run the SAE
+        f, top_acts_BK, top_indices_BK, feat_acts_BF = self.ae.encode(
+            x, return_topk=True, use_threshold=False
+        )
+
+        if step > self.threshold_start_step:
+            self.update_threshold(top_acts_BK)
+
+        x_hat = self.ae.decode(f)
+
+        # Measure goodness of reconstruction
+        e = x - x_hat
+
+        # Update the effective L0 (again, should just be K)
+        self.effective_l0 = top_acts_BK.size(1)
+
+        # Update "number of tokens since fired" for each features
+        num_tokens_in_step = x.size(0)
+        did_fire = t.zeros_like(self.num_tokens_since_fired, dtype=t.bool)
+        did_fire[top_indices_BK.flatten()] = True
+        self.num_tokens_since_fired += num_tokens_in_step
+        self.num_tokens_since_fired[did_fire] = 0
+
+        l2_loss = e.pow(2).sum(dim=-1).mean()
+        auxk_loss = (
+            self.get_auxiliary_loss(e.detach(), feat_acts_BF)
+            if self.auxk_alpha > 0
+            else 0
+        )
+
+        loss = l2_loss + self.auxk_alpha * auxk_loss
+
+        if not logging:
+            return loss
+        else:
+            return namedtuple("LossLog", ["x", "x_hat", "f", "losses"])(
+                x,
+                x_hat,
+                f,
+                {
+                    "l2_loss": l2_loss.item(),
+                    "auxk_loss": auxk_loss.item(),
+                    "loss": loss.item(),
+                },
+            )
+
+    def update(self, step: int, x: Float[t.Tensor, "n_tokens activation_dim"]) -> float:
+        # Initialise the decoder bias
+        if step == 0:
+            median = geometric_median(x)
+            median = median.to(self.ae.b_dec.dtype)
+            self.ae.b_dec.data = median
+
+        # compute the loss
+        x = x.to(self.device)
+        loss = self.loss(x, step=step)
+        loss.backward()
+
+        # clip grad norm and remove grads parallel to decoder directions
+        self.ae.decoder.weight.grad = remove_gradient_parallel_to_decoder_directions(
+            self.ae.decoder.weight,
+            self.ae.decoder.weight.grad,
+            self.ae.activation_dim,
+            self.ae.dict_size,
+        )
+        t.nn.utils.clip_grad_norm_(self.ae.parameters(), 1.0)
+
+        # do a training step
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        self.scheduler.step()
+
+        # Make sure the decoder is still unit-norm
+        self.ae.decoder.weight.data = set_decoder_norm_to_unit_norm(
+            self.ae.decoder.weight, self.ae.activation_dim, self.ae.dict_size
+        )
+
+        return loss.item()
+
+    @property
+    def config(self):
+        return {
+            "trainer_class": "ThresholdingTopKTrainer",
+            "dict_class": "ThresholdingAutoEncoderTopK",
+            "lr": self.lr,
+            "steps": self.steps,
+            "auxk_alpha": self.auxk_alpha,
+            "warmup_steps": self.warmup_steps,
+            "decay_start": self.decay_start,
+            "threshold_beta": self.threshold_beta,
+            "threshold_start_step": self.threshold_start_step,
+            "seed": self.seed,
+            "activation_dim": self.ae.activation_dim,
+            "dict_size": self.ae.dict_size,
+            "k": self.ae.k.item(),
+            "device": self.device,
+            "layer": self.layer,
+            "lm_name": self.lm_name,
+            "wandb_name": self.wandb_name,
+            "submodule_name": self.submodule_name,
+        }
+
+
+class NestedThresholdingTopKTrainer(ThresholdingTopKTrainer):
+    """
+    Nested hard thresholding Top-K SAE training scheme.
+
+    Trains a sparse autoencoder with multiple sparsity levels simultaneously,
+    using hard thresholding with a single decoder matrix.
+    Each k value represents a nested model with different sparsity.
+    """
+
+    def __init__(
+        self,
+        steps: int,  # total number of steps to train for
+        activation_dim: int,
+        dict_size: int,
+        k_values: list[int],  # list of k values for nested models
+        layer: int,
+        lm_name: str,
+        k_weights: Optional[list[float]] = None,  # weights for each k level
+        dict_class: type = NestedThresholdingAutoEncoderTopK,
+        lr: Optional[float] = None,
+        auxk_alpha: float = 1 / 32,  # see Appendix A.2
+        warmup_steps: int = 1000,
+        decay_start: Optional[int] = None,  # when does the lr decay start
+        seed: Optional[int] = None,
+        device: Optional[str] = None,
+        wandb_name: str = "NestedThresholdingAutoEncoderTopK",
+        submodule_name: Optional[str] = None,
+    ):
+        # Ensure k_values are sorted and store them
+        self.k_values = sorted(k_values)
+
+        # Set default weights if not provided
+        if k_weights is None:
+            self.k_weights = [1.0 / len(k_values)] * len(k_values)
+        else:
+            assert len(k_weights) == len(
+                k_values
+            ), "k_weights must have same length as k_values"
+            self.k_weights = k_weights
+
+        # Call parent init with max_k and base dict_class (will be replaced)
+        super().__init__(
+            steps=steps,
+            activation_dim=activation_dim,
+            dict_size=dict_size,
+            k=max(self.k_values),
+            layer=layer,
+            lm_name=lm_name,
+            dict_class=ThresholdingAutoEncoderTopK,  # Use base class for parent init
+            lr=lr,
+            auxk_alpha=auxk_alpha,
+            warmup_steps=warmup_steps,
+            decay_start=decay_start,
+            threshold_beta=0.999,  # Not used in nested, but required by parent
+            threshold_start_step=1000,  # Not used in nested, but required by parent
+            seed=seed,
+            device=device,
+            wandb_name=wandb_name,
+            submodule_name=submodule_name,
+        )
+
+        # Override autoencoder with nested version
+        self.ae = dict_class(activation_dim, dict_size, k_values)
+        self.ae.to(self.device)
+
+        # Override logging parameters for nested version
+        self.logging_parameters = [
+            "effective_l0_per_k",
+            "dead_features",
+            "pre_norm_auxk_loss",
+        ]
+        self.effective_l0_per_k = {k: -1 for k in k_values}
+
+        # Re-initialize optimizer and scheduler with nested AE parameters
+        self.optimizer = t.optim.Adam(
+            self.ae.parameters(), lr=self.lr, betas=(0.9, 0.999)
+        )
+        lr_fn = get_lr_schedule(steps, warmup_steps, decay_start=decay_start)
+        self.scheduler = t.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lr_fn)
+
+    def loss(
+        self,
+        x: Float[t.Tensor, "n_tokens activation_dim"],
+        step: Optional[int] = None,
+        logging: bool = False,
+    ) -> Union[Float[t.Tensor, ""], namedtuple]:
+        """Compute nested loss for all k values."""
+        # Get nested encodings and initial activations
+        nested_encodings, feat_acts_BF = self.ae.encode_with_info(x)
+
+        # Compute loss for each k value
+        total_loss = 0.0
+        l2_losses = {}
+
+        for i, k in enumerate(self.k_values):
+            f_k = nested_encodings[k]
+            x_hat_k = self.ae.decode(f_k)
+            e_k = x - x_hat_k
+
+            # L2 loss for this k
+            l2_loss_k = e_k.pow(2).sum(dim=-1).mean()
+            l2_losses[k] = l2_loss_k.item()
+
+            # Weighted contribution to total loss
+            total_loss += self.k_weights[i] * l2_loss_k
+
+            # Update effective L0 for this k
+            self.effective_l0_per_k[k] = k
+
+            # Update dead features tracking (only for max_k)
+            if k == self.ae.max_k:
+                num_tokens_in_step = x.size(0)
+                active_features = (f_k != 0).any(dim=0)
+                did_fire = t.zeros_like(self.num_tokens_since_fired, dtype=t.bool)
+                did_fire[active_features] = True
+                self.num_tokens_since_fired += num_tokens_in_step
+                self.num_tokens_since_fired[did_fire] = 0
+
+                # Compute auxiliary loss using largest k's residual
+                auxk_loss = (
+                    self.get_auxiliary_loss(e_k.detach(), feat_acts_BF)
+                    if self.auxk_alpha > 0
+                    else 0
+                )
+
+        # Add auxiliary loss to total
+        loss = total_loss + self.auxk_alpha * auxk_loss
+
+        if not logging:
+            return loss
+        else:
+            # Return info for largest k
+            x_hat_max = self.ae.decode(nested_encodings[self.ae.max_k])
+            return namedtuple("LossLog", ["x", "x_hat", "f", "losses"])(
+                x,
+                x_hat_max,
+                nested_encodings[self.ae.max_k],
+                {
+                    "l2_losses": l2_losses,
+                    "auxk_loss": (
+                        auxk_loss.item()
+                        if isinstance(auxk_loss, t.Tensor)
+                        else auxk_loss
+                    ),
+                    "loss": loss.item(),
+                },
+            )
+
+    @property
+    def config(self):
+        return {
+            "trainer_class": "NestedThresholdingTopKTrainer",
+            "dict_class": "NestedThresholdingAutoEncoderTopK",
+            "lr": self.lr,
+            "steps": self.steps,
+            "auxk_alpha": self.auxk_alpha,
+            "warmup_steps": self.warmup_steps,
+            "decay_start": self.decay_start,
+            "seed": self.seed,
+            "activation_dim": self.ae.activation_dim,
+            "dict_size": self.ae.dict_size,
+            "k_values": self.k_values,
+            "k_weights": self.k_weights,
+            "device": self.device,
+            "layer": self.layer,
+            "lm_name": self.lm_name,
+            "wandb_name": self.wandb_name,
+            "submodule_name": self.submodule_name,
+        }
