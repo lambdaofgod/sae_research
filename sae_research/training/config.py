@@ -1,8 +1,11 @@
 from dataclasses import dataclass, asdict, field
 from typing import Optional, Type, Any
 from enum import Enum
-import torch as t
+from pathlib import Path
 import itertools
+
+import torch as t
+import yaml
 
 from dictionary_learning.trainers.standard import (
     StandardTrainer,
@@ -45,6 +48,59 @@ from dictionary_learning.dictionary import (
 )
 
 
+# ---------------------------------------------------------------------------
+# YAML loading
+# ---------------------------------------------------------------------------
+
+_CONFIGS_DIR = Path(__file__).parent / "configs"
+
+_DTYPE_MAP = {
+    "float16": t.float16,
+    "float32": t.float32,
+    "bfloat16": t.bfloat16,
+}
+
+
+def _load_yaml(name: str) -> dict:
+    with open(_CONFIGS_DIR / name) as f:
+        return yaml.safe_load(f)
+
+
+def _load_models() -> dict:
+    raw = _load_yaml("models.yaml")
+    configs = {}
+    for model_name, v in raw.items():
+        activault = None
+        if "activault" in v:
+            a = v["activault"]
+            activault = ActivaultConfig(
+                s3_prefix=a["s3_prefix"],
+                s3_bucket=a.get("s3_bucket", "activations"),
+                s3_buffer_size=a.get("s3_buffer_size", 2),
+                s3_workers=a.get("s3_workers", 2),
+            )
+        configs[model_name] = LLMConfig(
+            llm_batch_size=v["llm_batch_size"],
+            context_length=v["context_length"],
+            sae_batch_size=v["sae_batch_size"],
+            dtype=_DTYPE_MAP[v["dtype"]],
+            activault=activault,
+        )
+    return configs
+
+
+def _load_architectures() -> dict:
+    return _load_yaml("architectures.yaml")
+
+
+def _load_defaults() -> dict:
+    return _load_yaml("defaults.yaml")
+
+
+# ---------------------------------------------------------------------------
+# Enums & dataclasses (unchanged public API)
+# ---------------------------------------------------------------------------
+
 class TrainerType(Enum):
     STANDARD = "standard"
     STANDARD_NEW = "standard_new"
@@ -62,7 +118,7 @@ class TrainerType(Enum):
 
 @dataclass
 class ActivaultConfig:
-    s3_prefix: str            # e.g. "gemma2_2b/models.layers.13.mlp.post"
+    s3_prefix: str
     s3_bucket: str = "activations"
     s3_buffer_size: int = 2
     s3_workers: int = 2
@@ -85,68 +141,38 @@ class SparsityPenalties:
     gated: list[float]
 
 
-num_tokens = 200_000_000
+# ---------------------------------------------------------------------------
+# Load configs from YAML at import time (replaces module-level globals)
+# ---------------------------------------------------------------------------
 
+_arch_cfg = _load_architectures()
+_defaults_cfg = _load_defaults()
+
+LLM_CONFIG = _load_models()
+
+SPARSITY_PENALTIES = SparsityPenalties(**_arch_cfg["sparsity_penalties"])
+TARGET_L0s = _arch_cfg["target_l0s"]
+
+_training_params = _arch_cfg["training_params"]
+WARMUP_STEPS = _training_params["warmup_steps"]
+SPARSITY_WARMUP_STEPS = _training_params["sparsity_warmup_steps"]
+DECAY_START_FRACTION = _training_params["decay_start_fraction"]
+K_ANNEAL_END_FRACTION = _training_params["k_anneal_end_fraction"]
+
+num_tokens = _defaults_cfg["num_tokens"]
 print(f"NOTE: Training on {num_tokens} tokens")
-
-eval_num_inputs = 200
-random_seeds = [0]
-# dictionary_widths = [2**14, 2**16]
-dictionary_widths = [2**14]  # , 2**16]
-
-WARMUP_STEPS = 100
-SPARSITY_WARMUP_STEPS = 500
-DECAY_START_FRACTION = 0.8
-K_ANNEAL_END_FRACTION = 0.01
-remove_bos = True
-max_activation_norm_multiple = 10
-
-learning_rates = [1e-4]
+eval_num_inputs = _defaults_cfg["eval_num_inputs"]
+random_seeds = _defaults_cfg["random_seeds"]
+dictionary_widths = _defaults_cfg["dictionary_widths"]
+learning_rates = _defaults_cfg["learning_rates"]
+remove_bos = _defaults_cfg["remove_bos"]
+max_activation_norm_multiple = _defaults_cfg["max_activation_norm_multiple"]
+wandb_project = _defaults_cfg["wandb_project"]
 
 
-wandb_project = "dictionary_learning_demo_sae_training"
-
-LLM_CONFIG = {
-    "EleutherAI/pythia-70m-deduped": LLMConfig(
-        llm_batch_size=128, context_length=128, sae_batch_size=2048, dtype=t.float16
-    ),
-    "EleutherAI/pythia-160m-deduped": LLMConfig(
-        llm_batch_size=32, context_length=1024, sae_batch_size=2048, dtype=t.float32
-    ),
-    "google/gemma-2-2b": LLMConfig(
-        llm_batch_size=4, context_length=1024, sae_batch_size=2048, dtype=t.bfloat16
-    ),
-    "google/gemma-2-2b-it": LLMConfig(
-        llm_batch_size=4, context_length=256, sae_batch_size=2048, dtype=t.bfloat16,
-        activault=ActivaultConfig(
-            s3_prefix="gemma2_2b/models.layers.13.mlp.post",
-        ),
-    ),
-    "Qwen/Qwen2.5-Coder-32B-Instruct": LLMConfig(
-        llm_batch_size=4, context_length=2048, sae_batch_size=2048, dtype=t.bfloat16
-    ),
-    "Qwen/Qwen3-8B": LLMConfig(
-        llm_batch_size=16, context_length=2048, sae_batch_size=2048, dtype=t.bfloat16
-    ),
-    "Qwen/Qwen3-14B": LLMConfig(
-        llm_batch_size=8, context_length=2048, sae_batch_size=2048, dtype=t.bfloat16
-    ),
-    "Qwen/Qwen3-32B": LLMConfig(
-        llm_batch_size=2, context_length=2048, sae_batch_size=2048, dtype=t.bfloat16
-    ),
-}
-
-SPARSITY_PENALTIES = SparsityPenalties(
-    standard=[0.012, 0.015, 0.02, 0.03, 0.04, 0.06],
-    standard_new=[0.012, 0.015, 0.02, 0.03, 0.04, 0.06],
-    p_anneal=[0.006, 0.008, 0.01, 0.015, 0.02, 0.025],
-    gated=[0.012, 0.018, 0.024, 0.04, 0.06, 0.08],
-)
-
-
-TARGET_L0s = [20, 40, 80, 160, 320]
-# TARGET_L0s = [20, 40, 80, 160, 320, 640]
-
+# ---------------------------------------------------------------------------
+# Trainer config dataclasses
+# ---------------------------------------------------------------------------
 
 @dataclass
 class BaseTrainerConfig:
@@ -206,7 +232,7 @@ class TopKTrainerConfig(BaseTrainerConfig):
     k: int
     auxk_alpha: float = 1 / 32
     threshold_beta: float = 0.999
-    threshold_start_step: int = 1000  # when to begin tracking the average threshold
+    threshold_start_step: int = 1000
     k_anneal_steps: Optional[int] = None
 
 
@@ -217,7 +243,7 @@ class NestedThresholdingTopKTrainerConfig(BaseTrainerConfig):
     lr: float
     k_values: list[int]
     k_weights: Optional[list[float]] = None
-    auxk_alpha: float = 1 / 32  # when to begin tracking the average threshold
+    auxk_alpha: float = 1 / 32
 
 
 @dataclass
@@ -225,7 +251,7 @@ class MatchingPursuitTrainerConfig(BaseTrainerConfig):
     dict_size: int
     seed: int
     lr: float
-    s: int  # number of matching pursuit steps
+    s: int
     auxk_alpha: float = 1 / 32
     s_anneal_steps: Optional[int] = None
 
@@ -248,7 +274,7 @@ class MatryoshkaBatchTopKTrainerConfig(BaseTrainerConfig):
     group_weights: Optional[list[float]] = None
     auxk_alpha: float = 1 / 32
     threshold_beta: float = 0.999
-    threshold_start_step: int = 1000  # when to begin tracking the average threshold
+    threshold_start_step: int = 1000
     k_anneal_steps: Optional[int] = None
 
 
@@ -271,6 +297,10 @@ class JumpReluTrainerConfig(BaseTrainerConfig):
     sparsity_penalty: float = 1.0
     bandwidth: float = 0.001
 
+
+# ---------------------------------------------------------------------------
+# Sweep generation
+# ---------------------------------------------------------------------------
 
 def get_trainer_configs(
     architectures: list[str],
@@ -461,7 +491,7 @@ def get_trainer_configs(
             seeds,
             dict_sizes,
             learning_rates,
-            TARGET_L0s,  # Using TARGET_L0s for S values
+            TARGET_L0s,
         ):
             config = MatchingPursuitTrainerConfig(
                 **base_config,
@@ -477,17 +507,10 @@ def get_trainer_configs(
             trainer_configs.append(asdict(config))
 
     if TrainerType.NESTED_THRESHOLDING_TOP_K.value in architectures:
-        # For nested thresholding, we use multiple k values at once
-        # We'll use subsets of TARGET_L0s to create nested configurations
         for seed, dict_size, learning_rate in itertools.product(
             seeds, dict_sizes, learning_rates
         ):
-            # Use all TARGET_L0s values for nested training
-            k_values = sorted(
-                TARGET_L0s
-            )  # Ensure they're sorted from smallest to largest
-
-            # Use uniform weights by default
+            k_values = sorted(TARGET_L0s)
             k_weights = [1.0 / len(k_values)] * len(k_values)
 
             config = NestedThresholdingTopKTrainerConfig(
@@ -504,14 +527,10 @@ def get_trainer_configs(
             trainer_configs.append(asdict(config))
 
     if TrainerType.STIEFEL_NESTED_THRESHOLDING_TOP_K.value in architectures:
-        # Stiefel nested thresholding with manifold-constrained decoder weights
         for seed, dict_size, learning_rate in itertools.product(
             seeds, dict_sizes, learning_rates
         ):
-            # Use all TARGET_L0s values for nested training
             k_values = sorted(TARGET_L0s)
-
-            # Use uniform weights by default
             k_weights = [1.0 / len(k_values)] * len(k_values)
 
             config = NestedThresholdingTopKTrainerConfig(

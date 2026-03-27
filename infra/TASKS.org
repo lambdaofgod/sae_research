@@ -1,0 +1,590 @@
+#+title: ML Platform Tasks
+#+SEQ_TODO: TODO NEXT IN-PROGRESS BLOCKED | DONE CANCELLED
+
+* Current state vs target state
+
+** What we have now
+
+#+begin_example
+forks/dictionary_learning_demo/          sae_research/
+┌─────────────────────────────┐          ┌──────────────────────────────────┐
+│ training code (separate repo)│          │ evaluation + analysis            │
+│                             │          │                                  │
+│ demo.py ──→ demo_config.py  │          │ sae_research/                    │
+│   │          (531 lines of  │          │   thresholding_sae.py (DIVERGED) │
+│   │           globals)      │          │   dictionary_learning_adapters.py│
+│   ├──→ training.py          │          │                                  │
+│   └──→ utils_modified.py    │          │ experiments/sae_bench/           │
+│                             │          │   DVC pipeline (dvc.yaml)        │
+│ thresholding_sae.py ◄───┐  │          │   11 stages, params.yaml         │
+│ stiefel_sae.py       ◄──┤  │          │                                  │
+│ matching_pursuit_sae.py ◄┘  │          │ experiments/sparse_subspace_..   │
+│                             │          │   DVC pipeline                   │
+│ parallel_training.py        │          └──────────────────────────────────┘
+│   (hardcoded cuda:0..3)     │
+│                             │          sae_research/infra/activault/
+│ WandB (trackio) for logging │          ┌──────────────────────────────────┐
+│ results → saes_*/trainer_N/ │          │ K8s infra (working)              │
+│   eval_results.json (scattered)        │                                  │
+└─────────────────────────────┘          │ KFP v2.15.0 ──→ Activault       │
+                                         │   collection pipeline            │
+         no connection                   │ Garage (S3) ──→ activations      │
+         between repos                   │ Prometheus + Grafana monitoring   │
+                                         │ Helm chart                       │
+                                         └──────────────────────────────────┘
+#+end_example
+
+Problems:
+- Training and evaluation live in separate repos with no shared interface
+- =thresholding_sae.py= diverged between repos (inference-only vs full)
+- Config is 531 lines of Python globals, not parameterizable for sweeps
+- Training launched manually (=demo.py= CLI or hardcoded =parallel_training.py=)
+- Results scattered in filesystem, only queryable via WandB or manual digging
+- Evaluation pipelines use DVC (local orchestration, no GPU scheduling)
+- No way to submit training jobs to a queue
+- No standard artifact format between training and evaluation
+
+** Target state
+
+#+begin_example
+sae_research/  (single monorepo)
+┌──────────────────────────────────────────────────────────────────┐
+│                                                                  │
+│  sae_research/                    training/                      │
+│    thresholding_sae.py ◄────────── train.py (trainSAE loop)     │
+│    stiefel_sae.py                  runner.py (entry point)       │
+│    matching_pursuit_sae.py         config.py (dataclasses)       │
+│    dictionary_learning_adapters.py utils.py                      │
+│                                    configs/                      │
+│         ┌──────────────────────────  models/*.yaml               │
+│         │                            architectures/*.yaml        │
+│         │                            sweeps/*.yaml               │
+│         │                                                        │
+│         ▼                                                        │
+│  ┌─ artifact contract ─┐     ae.pt + config.json                 │
+│  │ standard format for │ ◄── (training output)                   │
+│  │ SAE artifacts       │ ──► (eval input)                        │
+│  └─────────────────────┘                                         │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+         │                    │                     │
+         ▼                    ▼                     ▼
+┌─── K8s cluster ──────────────────────────────────────────────────┐
+│                                                                  │
+│  KFP v2                                                          │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────────┐ │
+│  │ Training    │  │ Evaluation   │  │ Activation collection   │ │
+│  │ pipeline    │  │ pipeline     │  │ pipeline (Activault)    │ │
+│  │ (new)       │  │ (replaces    │  │ (existing, working)     │ │
+│  │             │  │  DVC)        │  │                         │ │
+│  └──────┬──────┘  └──────┬──────┘  └─────────────────────────┘ │
+│         │                │                                       │
+│         ▼                ▼                                       │
+│  Training Operator v2          MLflow                            │
+│  ┌─────────────────┐    ┌───────────────────────────┐           │
+│  │ TrainJob CRD    │    │ experiment tracking        │           │
+│  │ ClusterTraining │    │ params, metrics, artifacts │           │
+│  │  Runtime        │    │ parent/child runs          │           │
+│  └────────┬────────┘    │ search_runs() for compare  │           │
+│           │             └───────────────────────────┘           │
+│           ▼                                                      │
+│  Kueue                         Garage (S3)                       │
+│  ┌──────────────────┐    ┌───────────────────────────┐          │
+│  │ GPU admission    │    │ activations (existing)     │          │
+│  │ ResourceFlavors  │    │ MLflow artifacts (new)     │          │
+│  │ queuing, quotas  │    │ SAE checkpoints (new)      │          │
+│  └──────────────────┘    └───────────────────────────┘          │
+│                                                                  │
+│  Katib                         Prometheus + Grafana              │
+│  ┌──────────────────┐    ┌───────────────────────────┐          │
+│  │ HP sweeps from   │    │ existing monitoring        │          │
+│  │ sweep/*.yaml     │    │ + Argo/KFP ServiceMonitors │          │
+│  │ → TrainJobs      │    │                            │          │
+│  │ → Kueue queue    │    │                            │          │
+│  └──────────────────┘    └───────────────────────────┘          │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+#+end_example
+
+** How they relate
+
+What stays as-is:
+- Activault collection pipeline, Garage S3, Helm chart, monitoring stack
+
+What migrates:
+- Training code from =dictionary_learning_demo/= → =sae_research/sae_research/training/=
+- Custom SAE architectures → =sae_research/sae_research/= (reconcile diverged =thresholding_sae.py=)
+- Tests worth keeping → =sae_research/test/=
+
+What gets replaced:
+- =demo_config.py= globals → structured YAML configs (=configs/models/=, =architectures/=, =sweeps/=)
+- DVC evaluation pipeline → KFP evaluation pipeline
+- =parallel_training.py= hardcoded device assignment → Kueue GPU scheduling
+- =itertools.product()= sweep generation → Katib Experiment CRDs
+- WandB-only tracking + scattered =eval_results.json= → MLflow
+
+What's new:
+- Artifact contract (standard =ae.pt= + =config.json= format between train and eval)
+- MLflow server on K8s (PostgreSQL + Garage artifact store)
+- Training Operator v2 (=TrainJob= / =ClusterTrainingRuntime= CRDs)
+- Kueue (GPU admission control, queuing, quotas)
+- Katib (hyperparameter sweep orchestration)
+- KFP training pipeline + KFP evaluation pipeline
+
+* DONE Activation caching (Activault + Garage)                    :infra:data:
+
+Activault collection on KFP v2.15.0, Garage S3 store, Helm chart, monitoring
+(Prometheus + Grafana + custom exporter). See =activault/= directory.
+
+* DONE Monitoring stack (Prometheus + Grafana)              :infra:monitoring:
+
+kube-prometheus-stack, Garage metrics, custom activault-exporter, dashboards.
+See =activault/LOGGING_METRICS.org=.
+
+** TODO Argo/KFP ServiceMonitors
+ServiceMonitors for Argo controller (:9090) and KFP API server (:8888).
+Argo Grafana dashboard ID 21393.
+
+* Resolved design decisions                                      :planning:
+
+** DONE Decide monorepo scope
+Answer: pull =dictionary_learning_demo= into =sae_research/=, but not
+everything — only the stuff we need.
+
+** DONE Decide config abstraction level
+Answer: structured configs (Hydra-style: model.yaml + architecture.yaml +
+sweep.yaml as composable pieces).
+
+** DONE Decide what "compare across models" means concretely
+Answer: we'll have multiple model types, each model in a type runs the same
+evals (e.g. sae_bench scripts), so results are directly comparable. Training
+and evaluation are separate pipeline stages.
+
+* TODO [#A] Migrate training code from dictionary_learning_demo :code:migration:
+:PROPERTIES:
+:EFFORT:   large
+:END:
+
+Pull needed code from =forks/dictionary_learning_demo/= into =sae_research/=.
+This must happen before any integration work (MLflow, KFP, structured configs)
+since there's no point wiring tooling into code that's about to move.
+
+Currently split across repos:
+- =sae_research/= — experiments, sae_bench pipeline, feature families
+- =forks/dictionary_learning_demo/= — training code, custom SAE architectures
+- =sae_research/infra/= — K8s infra, activault, monitoring
+
+** DONE Identify what to migrate
+
+*** Must migrate (core training system)
+
+Dependency chain: =demo.py= → =demo_config.py= → ={thresholding,stiefel,matching_pursuit}_sae.py=
+                  =demo.py= → =training.py=
+                  =demo.py= → =utils_modified.py= → ={thresholding,matching_pursuit}_sae.py=
+
+| File                     | What it does                                              | Internal deps                                  |
+|--------------------------+-----------------------------------------------------------+------------------------------------------------|
+| =training.py=            | Core =trainSAE()= loop, logging, checkpointing, WandB    | none                                           |
+| =demo.py=                | Entry point: model loading, activation buffers, eval      | demo_config, training, utils_modified           |
+| =demo_config.py=         | 531-line config: LLM_CONFIG, TrainerType enum, sweeps     | thresholding_sae, stiefel_sae, matching_pursuit_sae |
+| =thresholding_sae.py=    | ThresholdingTopK + NestedThresholdingTopK SAE & trainers   | none (base for stiefel)                        |
+| =stiefel_sae.py=         | Stiefel manifold-constrained nested thresholding (geoopt) | thresholding_sae                               |
+| =matching_pursuit_sae.py= | Greedy iterative feature selection SAE & trainers         | none                                           |
+| =utils_modified.py=      | =load_dictionary()=, =truncate_model()=, =get_submodule()=, =create_activault_buffer()=, data generators | thresholding_sae, matching_pursuit_sae |
+
+*** Migrate (tests worth keeping)
+
+| File                        | What it tests                                      |
+|-----------------------------+----------------------------------------------------|
+| =test_nested_integration.py= | Verifies nested thresholding config generation     |
+| =test_llm_training.py=      | 320-step smoke test on gemma-2-2b, no S3 needed    |
+| =test_activault_training.py= | Same but via S3 Activault path, needs K8s creds    |
+| =test_mp_typing.py=         | Shape/type validation for matching pursuit          |
+
+*** Merge (not a file, but deps)
+
+=pyproject.toml= deps to merge into =sae_research/pyproject.toml=:
+- =dictionary-learning= git dep (=saprmarks/dictionary_learning@1d2737a=)
+- =geoopt>=0.5.1= (Stiefel manifold)
+- =trackio>=0.7.0= (WandB wrapper)
+- =jaxtyping>=0.2.0=, =einops>=0.7.0=
+- =zstandard>=0.22.0= (data loading)
+- torch, transformers, datasets likely already present
+
+*** Leave behind
+
+| Path                      | Why                                  |
+|---------------------------+--------------------------------------|
+| =saes_*/= (6 dirs)       | Generated training artifacts         |
+| =utility_notebooks/=      | One-off exploratory notebooks        |
+| =parallel_training.py=    | Hardcoded multi-GPU launcher, replaced by KFP |
+| =source_kubernetes_vars.sh= | Minikube-specific credential helper  |
+| =graphing.ipynb=          | One-off visualization                |
+| =organize_and_upload_trainers.ipynb= | One-off HF upload notebook |
+| =dataset_test.py=         | One-off data loading test            |
+| =jaxtyping_example.md=    | Notes                                |
+
+** DONE Define directory structure in sae_research
+=sae_research/sae_research/= already has 1766 lines of code:
+- =thresholding_sae.py= (359 lines) — inference-only version, no trainers, but
+  has checkpoint loading fixes (handles both raw state_dict and training
+  checkpoint formats) that the demo version lacks
+- =dictionary_learning_adapters.py= (211 lines) — bridges nested thresholding
+  SAEs to sae_bench (=NestedThresholdingTopKSAE= wrapping =BaseSAE=)
+- =sae_bench_utils.py=, =sae_bench_demo.py= — sae_bench helpers
+- =embedder_sae.py=, =instance_sae.py=, =modules.py= — other SAE experiments
+- =sae_features.py= — feature analysis
+
+Proposed structure after migration:
+
+#+begin_example
+sae_research/
+  pyproject.toml
+  sae_research/                        # Python package
+    # --- existing ---
+    dictionary_learning_adapters.py    # sae_bench bridge (imports from architectures/)
+    sae_bench_utils.py
+    sae_bench_demo.py
+    embedder_sae.py
+    instance_sae.py
+    modules.py
+    sae_features.py
+    feature_families/                  # existing subpackage
+    # --- new: custom SAE architectures ---
+    thresholding_sae.py                # reconciled full version (autoencoder + trainers)
+    stiefel_sae.py                     # from demo
+    matching_pursuit_sae.py            # from demo
+    # --- new: training infrastructure ---
+    training/
+      __init__.py
+      train.py                         # trainSAE() loop (was training.py)
+      runner.py                        # entry point, activation buffers, eval (was demo.py)
+      config.py                        # TrainerType enum, LLMConfig, get_trainer_configs (was demo_config.py)
+      utils.py                         # load_dictionary, truncate_model, get_submodule, create_activault_buffer (was utils_modified.py)
+      configs/                         # structured YAML configs (later task)
+        models/
+        architectures/
+        sweeps/
+  experiments/                         # existing
+    sae_bench/                         # evaluation pipeline (migrating from DVC to KFP)
+    sparse_subspace_clustering/
+  infra/                               # existing
+    activault/                         # Helm chart, KFP pipeline, monitoring
+  scripts/                             # existing
+  test/                                # existing
+    test_embedder_sae.py
+    test_nested_integration.py         # from demo
+    test_llm_training.py               # from demo
+    test_activault_training.py         # from demo
+    test_mp_typing.py                  # from demo
+#+end_example
+
+SAE architecture files (=thresholding_sae.py=, etc.) stay at package root
+since they're imported by both training code and =dictionary_learning_adapters.py=.
+Training infra goes in a =training/= subpackage to keep it separate from
+the research/analysis code.
+
+** DONE Reconcile diverged thresholding_sae.py
+Took demo version (792 lines, autoencoders + trainers), applied sae_research's
+=from_pretrained()= fixes (=map_location='cpu'=, ='ae'= key unwrapping) to both
+=ThresholdingAutoEncoderTopK= and =NestedThresholdingAutoEncoderTopK=.
+Same fixes applied to =stiefel_sae.py= and =matching_pursuit_sae.py=.
+=dictionary_learning_adapters.py= imports verified working.
+
+** DONE Move code and fix imports
+Files migrated, imports updated to use =sae_research.*= paths.
+=geoopt= made optional (lazy import with clear error in =stiefel_sae.py=).
+
+=pyproject.toml= deps resolved:
+- =einops>=0.7.0= — added
+- =jaxtyping>=0.2.0= — added
+- =zstandard>=0.22.0= — added
+- =dictionary-learning= — pinned to rev =1d2737a=
+- =geoopt= — intentionally NOT added (optional, only for Stiefel variant)
+- =trackio= — stays at =0.5.0= (conflict: =sae-lens==5.4.0= needs =plotly<6=,
+  =trackio>=0.7.0= needs =plotly>=6=; resolve when sae-lens updates)
+
+** DONE Migrate test files
+Tests in =test/=, smoke test scripts in =scripts/smoke_tests/=. Imports fixed.
+- =test/test_nested_integration.py= — passes. Verifies =get_trainer_configs()=.
+- =test/test_mp_typing.py= — passes. Shape/type validation for matching pursuit.
+- =scripts/smoke_tests/llm_training.py= — 130-step run on gemma-2-2b. Passes (GPU).
+- =scripts/smoke_tests/activault_training.py= — 130-step run via Garage S3. Passes (GPU + K8s port-forward).
+
+** DONE Verify with real checkpoints
+All verified:
+- =from_pretrained()= loads real pythia-70m checkpoint, encode/decode roundtrip correct.
+- =load_dictionary()= dispatches both =NestedThresholding= and =StandardAutoEncoder= types.
+- =dictionary_learning_adapters.py= bridge produces working =NestedThresholdingTopKSAE=.
+- LLM smoke test: 130-step TopK training on gemma-2-2b (direct activations). Passes.
+- Activault smoke test: 130-step TopK training on gemma-2-2b-it (S3 streaming). Passes.
+  5 trainers saved =ae.pt= + =config.json= each.
+
+* DONE Restructure config (structured configs)                   :code:config:
+:PROPERTIES:
+:EFFORT:   medium
+:END:
+
+=config.py= was 531 lines mixing three concerns:
+1. Model definitions (=LLM_CONFIG= dict — batch sizes, dtypes, ctx lengths)
+2. Architecture-specific hyperparam grids (=SPARSITY_PENALTIES=, =TARGET_L0s=)
+3. Sweep logic (=get_trainer_configs()= with =itertools.product()=)
+
+Split into structured YAML configs loaded at import time. Public API of
+=config.py= unchanged — all module-level names preserved, callers unmodified.
+
+** DONE Split model configs into YAML
+Extracted =LLM_CONFIG= into =training/configs/models.yaml=. All 8 models
+(pythia-70m, pythia-160m, gemma-2-2b, gemma-2-2b-it with Activault,
+Qwen2.5-Coder-32B, Qwen3-8B/14B/32B). Dtype stored as string, mapped to
+=torch.dtype= at load time.
+
+** DONE Split architecture configs into YAML
+Extracted into =training/configs/architectures.yaml=:
+- =sparsity_penalties=: per-arch grids (standard, standard_new, p_anneal, gated)
+- =target_l0s=: [20, 40, 80, 160, 320]
+- =training_params=: warmup=100, sparsity_warmup=500, decay_start=0.8, k_anneal_end=0.01
+
+** DONE Extract sweep defaults
+Extracted into =training/configs/defaults.yaml=:
+- =num_tokens=, =eval_num_inputs=, =random_seeds=, =dictionary_widths=,
+  =learning_rates=, =remove_bos=, =max_activation_norm_multiple=, =wandb_project=
+
+=get_trainer_configs()= sweep logic (=itertools.product()=) stays in Python —
+it reads from the YAML-loaded values. Declarative sweep YAML will come with
+Katib integration.
+
+** DONE Update training entry point to consume structured configs
+=config.py= now loads YAML via =yaml.safe_load()= at import time. Same public
+API: =LLM_CONFIG=, =SPARSITY_PENALTIES=, =TARGET_L0s=, =get_trainer_configs()=,
+all globals. =runner.py= unchanged. Both tests pass.
+
+* TODO [#B] Design SAE artifact contract between training and eval :code:contract:
+:PROPERTIES:
+:EFFORT:   small
+:END:
+
+Training and evaluation are separate pipeline stages. Training produces SAE
+artifacts (=ae.pt= + =config.json=), eval consumes them. Currently
+=sae_bench/scripts/setup_saes.py= loads SAEs from HuggingFace or hardcoded
+paths — need a standard artifact format/location so eval can pick up any
+trained SAE automatically regardless of where it came from.
+
+This contract also determines how MLflow logs artifacts (what path structure,
+what metadata) and how KFP passes SAE references between train and eval steps.
+
+* TODO [#B] Fix training code pain points                   :code:training:
+:PROPERTIES:
+:EFFORT:   medium
+:END:
+
+Issues in the training code that will bite when running on the cluster.
+
+** TODO Handle Activault finite iteration
+=dictionary_learning_demo/TASKS.org= notes this as open: Activault's =S3RCache=
+raises =StopIteration= when S3 files are exhausted, unlike the LLM
+=ActivationBuffer= which loops infinitely. =trainSAE()= in =training.py= will
+stop early if activation data runs out before =steps= is reached. Need either:
+- Ensure =steps= doesn't exceed available tokens / =sae_batch_size=
+- Or implement multi-epoch by re-creating the cache iterator
+
+** TODO Checkpoint resumption
+=training.py= saves backups every 1000 steps (=ae.pt= + optimizer state) but
+there's no code to resume from a checkpoint. If a training run crashes or gets
+preempted by Kueue, it restarts from scratch. Need a =--resume= flag that
+loads =ae.pt= + optimizer and continues from the saved step.
+
+** TODO Evaluation parallelization
+=demo.py= =eval_saes()= runs evaluation serially on a single GPU after all
+training completes. With many SAE variants this is slow. Could parallelize
+across GPUs or make evaluation a separate KFP step that runs independently.
+
+* TODO [#B] MLflow — experiment tracking                         :tracking:
+:PROPERTIES:
+:EFFORT:   large
+:END:
+
+Currently experiment tracking is WandB-only (via =trackio= in =training.py=),
+results land as scattered =eval_results.json= files per trainer, and comparing
+across runs requires manually digging through directories like
+=saes_<model>_<archs>/resid_post_layer_N/trainer_N/=.
+
+sae_bench evaluation pipeline currently uses DVC (being replaced by KFP).
+
+** TODO Deploy MLflow server on K8s
+- PostgreSQL backend store
+- Garage as artifact store (reuse existing S3 infra)
+- Expose via proxy (extend existing nginx proxy from activault chart)
+- Helm chart or add to existing activault chart
+
+** TODO Define SAE experiment logging conventions
+Standardize what gets logged per training run so runs are queryable/comparable.
+
+Params to log (from =demo_config.py= =get_trainer_configs()=):
+- model_name, layer, architecture type
+- dictionary_width, learning_rate, seed
+- sparsity_penalty / target_L0 (architecture-dependent)
+- num_tokens, sae_batch_size, context_length, dtype
+- activault vs LLM-generated activations
+- hook point name
+
+Metrics to log (from =training.py= =trainSAE()= loop):
+- L0, loss, frac_variance_explained (logged per step already to WandB)
+- dead_features count
+- Final eval: loss_recovered, L0, MMCS (from =demo.py= =eval_saes()=)
+
+Use parent/child runs: parent = sweep (one =demo.py= invocation), children =
+individual trainer configs. =mlflow.search_runs()= for filtering across sweeps.
+
+** TODO Wire MLflow into training loop
+Replace or supplement the WandB multiprocessing logger in =training.py= lines
+22-32. Currently each trainer spawns a =mp.Process= for WandB — MLflow logging
+could go in the same loop (=training.py= lines 140-180 where metrics are
+already computed per step).
+
+Log final =ae.pt= as MLflow artifact (following the artifact contract) so
+models are discoverable without knowing the filesystem path. Log =config.json=
+as artifact.
+
+** TODO Wire MLflow into sae_bench evaluation pipeline
+=experiments/sae_bench/= extracts metrics to =metrics/*.json=. Add MLflow
+logging so eval results link back to the training run that produced the SAE.
+This wiring happens as part of the DVC → KFP migration for eval.
+
+** TODO KFP-MLflow integration
+When training runs move to KFP, each KFP component gets =MLFLOW_TRACKING_URI=
++ =MLFLOW_S3_ENDPOINT_URL= via K8s secrets. Pass =run_id= downstream as KFP
+artifact to link pipeline steps.
+
+* TODO [#B] Training Operator v2                            :infra:training:
+:PROPERTIES:
+:EFFORT:   medium
+:END:
+
+Unified =TrainJob= API. Platform-side =ClusterTrainingRuntime= defines GPU
+defaults, failure handling. User-side =TrainJob= manifests are lightweight.
+Kueue and KFP pipelines build on top of this.
+
+** TODO Deploy Training Operator v2
+Install from Kubeflow 1.11+. Define =ClusterTrainingRuntime= for SAE training
+workloads (single-GPU for now — current training code is not DDP).
+
+** TODO Evaluate distributed training needs
+Current training in =training.py= =trainSAE()= is single-GPU: one process,
+one device, sequential over all trainer configs. The Stiefel variant needs
+~3GB per gradient step for dict_size=16384 — might benefit from model
+parallelism on larger dict sizes. Evaluate whether DDP or model parallelism
+is worth it for the architectures being researched.
+
+* TODO [#C] GPU job scheduling — submit and queue training runs :infra:scheduling:
+:PROPERTIES:
+:EFFORT:   large
+:END:
+
+Currently training is launched manually via =demo.py= CLI or
+=parallel_training.py= which spawns one subprocess per GPU with hardcoded
+device assignments:
+
+#+begin_example
+# parallel_training.py — current approach
+configurations = [
+    {"arch": "jump_relu",              "device": "cuda:0"},
+    {"arch": "top_k p_anneal",         "device": "cuda:1"},
+    {"arch": "batch_top_k standard_new", "device": "cuda:2"},
+    {"arch": "gated",                  "device": "cuda:3"},
+]
+#+end_example
+
+Want: submit training configs and have them queue up on available GPUs
+automatically, instead of manually deciding what runs where and when.
+
+** TODO Package training code as a container image
+Build a Docker image with training code and all deps (torch, flash-attn,
+geoopt, etc.). Similar to how =activault-flashattn= image was built for the
+collection pipeline. Depends on migration being done first so the Docker
+build context is in =sae_research/=.
+
+** TODO Create KFP training pipeline
+KFP pipeline wrapping the training entry point — expose config params
+(model, layers, architectures, num_tokens, etc.) so they're visible in the
+KFP UI per run. Follow the same pattern as the activault collection pipeline:
+- =@dsl.component= with base image (not =@dsl.container_component=)
+- =/dev/shm= mount (PyTorch DataLoader needs it)
+- =imagePullPolicy: Never= for local images
+- =set_caching_options(False)= — training runs must never be skipped
+- Activault S3 creds injected via =use_secret_as_env=
+
+** TODO Create KFP evaluation pipeline
+Separate pipeline that takes SAE artifacts (following the artifact contract)
+and runs sae_bench evals. Decoupled from training — can evaluate any SAE
+regardless of how it was produced.
+
+** TODO Install Kueue for GPU admission control
+So submitted TrainJobs queue behind each other instead of fighting for GPUs.
+
+- ResourceFlavor per GPU type (mapped to node labels)
+- ClusterQueue with quota
+- LocalQueue in kubeflow namespace
+- Annotate KFP jobs with =kueue.x-k8s.io/queue-name=
+- StrictFIFO scheduling to start (simple, predictable)
+
+** TODO Katib for hyperparameter sweeps
+Currently sweeps are =itertools.product()= in =demo_config.py=
+=get_trainer_configs()= — generates all combos of seed × dict_width × lr ×
+sparsity_penalty and trains them sequentially (or manually split across GPUs
+via =parallel_training.py=).
+
+Katib =Experiment= CRD replaces this: define search space, objective metric
+(e.g. minimize reconstruction MSE at target L0), algorithm (Bayesian, TPE,
+Hyperband). Each trial spawns a TrainJob via Kueue. =parallelTrialCount=
+controls concurrent GPU usage automatically.
+
+Concrete search spaces from =demo_config.py=:
+- =dictionary_widths=: [2^12, 2^14, 2^16]
+- =learning_rates=: [1e-4] (currently fixed, could sweep)
+- =TARGET_L0s=: [20, 40, 80, 160, 320]
+- =SPARSITY_PENALTIES=: varies per architecture (6 values each)
+
+Structured config format (from config restructuring) maps directly onto
+Katib search space definitions.
+
+* Reference                                                    :reference:
+
+** Current training architectures (dictionary_learning_demo)
+| Architecture                | File                  | Key param           |
+|-----------------------------+-----------------------+---------------------|
+| Standard ReLU               | (upstream)            | sparsity_penalty    |
+| TopK                        | (upstream)            | target_L0           |
+| BatchTopK                   | (upstream)            | target_L0           |
+| Matryoshka BatchTopK        | (upstream)            | target_L0           |
+| JumpReLU                    | (upstream)            | target_L0           |
+| Gated                       | (upstream)            | sparsity_penalty    |
+| P-Anneal                    | (upstream)            | sparsity_penalty    |
+| Thresholding TopK           | thresholding_sae.py   | target_L0           |
+| Nested Thresholding TopK    | thresholding_sae.py   | TARGET_L0s list     |
+| Stiefel Nested Thresholding | stiefel_sae.py        | TARGET_L0s list     |
+| Matching Pursuit            | matching_pursuit_sae.py | n_pursuit_steps   |
+
+** Supported models
+| Model                        | Activault? | Batch | Ctx  | dtype    |
+|------------------------------+------------+-------+------+----------|
+| pythia-70m-deduped           | no         |   128 |  128 | float16  |
+| pythia-160m-deduped          | no         |    32 | 1024 | float32  |
+| gemma-2-2b                   | no         |     4 | 1024 | bfloat16 |
+| gemma-2-2b-it                | yes        |     4 |  256 | bfloat16 |
+| Qwen2.5-Coder-32B-Instruct  | no         |     1 | 1024 | bfloat16 |
+
+** Manning book
+*ML Platform Engineering* (Tan Wei Hao, Padmanabhan, Mallya; Feb 2026).
+Ch 4: MLflow. Ch 5: KFP v2. Ch 9: MLflow+KFP integration. Appendix A: setup.
+
+** Stack
+| Layer            | Tool                   | Purpose                            |
+|------------------+------------------------+------------------------------------|
+| Orchestration    | KFP v2                 | Pipeline DAGs                      |
+| GPU scheduling   | Kueue                  | Job queuing, quotas                |
+| Training         | Training Operator v2   | TrainJob API                       |
+| Sweeps           | Katib                  | Hyperparameter search              |
+| Experiment state | MLflow                 | Params, metrics, run comparison    |
+| Storage          | Garage (S3)            | Activations + artifacts            |
+| Monitoring       | Prometheus + Grafana   | Infra health, storage metrics      |

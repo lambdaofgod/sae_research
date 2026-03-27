@@ -1,0 +1,19 @@
+# Architecture-specific hyperparameter grids.
+#
+# sparsity_penalties: sweep values for architectures that use L1-style sparsity
+# target_l0s: sweep values for architectures that use top-k style sparsity
+# training_params: shared training schedule parameters
+
+sparsity_penalties:
+  standard: [0.012, 0.015, 0.02, 0.03, 0.04, 0.06]
+  standard_new: [0.012, 0.015, 0.02, 0.03, 0.04, 0.06]
+  p_anneal: [0.006, 0.008, 0.01, 0.015, 0.02, 0.025]
+  gated: [0.012, 0.018, 0.024, 0.04, 0.06, 0.08]
+
+target_l0s: [20, 40, 80, 160, 320]
+
+training_params:
+  warmup_steps: 100
+  sparsity_warmup_steps: 500
+  decay_start_fraction: 0.8
+  k_anneal_end_fraction: 0.01

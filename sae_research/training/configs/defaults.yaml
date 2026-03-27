@@ -1,0 +1,12 @@
+# Default sweep parameters.
+
+num_tokens: 200_000_000
+eval_num_inputs: 200
+random_seeds: [0]
+dictionary_widths: [16384]  # 2**14
+learning_rates: [0.0001]
+
+remove_bos: true
+max_activation_norm_multiple: 10
+
+wandb_project: dictionary_learning_demo_sae_training
