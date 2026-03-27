@@ -204,66 +204,72 @@ def trainSAE(
             # Verify that all autoencoders have a scale_biases method
             trainer.ae.scale_biases(1.0)
 
-    for step, act in enumerate(tqdm(data, total=steps)):
+    actual_steps = 0
+    try:
+        for step, act in enumerate(tqdm(data, total=steps)):
 
-        act = act.to(dtype=autocast_dtype)
+            act = act.to(dtype=autocast_dtype)
 
-        if normalize_activations:
-            act /= norm_factor
+            if normalize_activations:
+                act /= norm_factor
 
-        if step >= steps:
-            break
+            if step >= steps:
+                break
 
-        # logging
-        if (use_wandb or verbose) and step % log_steps == 0:
-            log_stats(
-                trainers, step, act, activations_split_by_head, transcoder, log_queues=log_queues, verbose=verbose
-            )
+            actual_steps = step
 
-        # saving
-        if save_steps is not None and step in save_steps:
-            for dir, trainer in zip(save_dirs, trainers):
-                if dir is None:
-                    continue
-
-                if normalize_activations:
-                    # Temporarily scale up biases for checkpoint saving
-                    trainer.ae.scale_biases(norm_factor)
-
-                if not os.path.exists(os.path.join(dir, "checkpoints")):
-                    os.mkdir(os.path.join(dir, "checkpoints"))
-
-                checkpoint = {k: v.cpu() for k, v in trainer.ae.state_dict().items()}
-                t.save(
-                    checkpoint,
-                    os.path.join(dir, "checkpoints", f"ae_{step}.pt"),
+            # logging
+            if (use_wandb or verbose) and step % log_steps == 0:
+                log_stats(
+                    trainers, step, act, activations_split_by_head, transcoder, log_queues=log_queues, verbose=verbose
                 )
 
-                if normalize_activations:
-                    trainer.ae.scale_biases(1 / norm_factor)
+            # saving
+            if save_steps is not None and step in save_steps:
+                for dir, trainer in zip(save_dirs, trainers):
+                    if dir is None:
+                        continue
 
-        # backup
-        if backup_steps is not None and step % backup_steps == 0:
-            for save_dir, trainer in zip(save_dirs, trainers):
-                if save_dir is None:
-                    continue
-                # save the current state of the trainer for resume if training is interrupted
-                # this will be overwritten by the next checkpoint and at the end of training
-                t.save(
-                    {
-                    "step": step,
-                    "ae": trainer.ae.state_dict(),
-                    "optimizer": trainer.optimizer.state_dict(),
-                    "config": trainer.config,
-                    "norm_factor": norm_factor,
-                    },
-                    os.path.join(save_dir, "ae.pt"),
-                )
+                    if normalize_activations:
+                        # Temporarily scale up biases for checkpoint saving
+                        trainer.ae.scale_biases(norm_factor)
 
-        # training
-        for trainer in trainers:
-            with autocast_context:
-                trainer.update(step, act)
+                    if not os.path.exists(os.path.join(dir, "checkpoints")):
+                        os.mkdir(os.path.join(dir, "checkpoints"))
+
+                    checkpoint = {k: v.cpu() for k, v in trainer.ae.state_dict().items()}
+                    t.save(
+                        checkpoint,
+                        os.path.join(dir, "checkpoints", f"ae_{step}.pt"),
+                    )
+
+                    if normalize_activations:
+                        trainer.ae.scale_biases(1 / norm_factor)
+
+            # backup
+            if backup_steps is not None and step % backup_steps == 0:
+                for save_dir, trainer in zip(save_dirs, trainers):
+                    if save_dir is None:
+                        continue
+                    # save the current state of the trainer for resume if training is interrupted
+                    # this will be overwritten by the next checkpoint and at the end of training
+                    t.save(
+                        {
+                        "step": step,
+                        "ae": trainer.ae.state_dict(),
+                        "optimizer": trainer.optimizer.state_dict(),
+                        "config": trainer.config,
+                        "norm_factor": norm_factor,
+                        },
+                        os.path.join(save_dir, "ae.pt"),
+                    )
+
+            # training
+            for trainer in trainers:
+                with autocast_context:
+                    trainer.update(step, act)
+    except StopIteration:
+        print(f"\nWARNING: Data exhausted at step {actual_steps} of {steps} requested. Saving current state.")
 
     # save final SAEs
     for save_dir, trainer in zip(save_dirs, trainers):
@@ -271,7 +277,7 @@ def trainSAE(
             trainer.ae.scale_biases(norm_factor)
         if save_dir is not None:
             checkpoint = {
-                "step": steps,
+                "step": actual_steps,
                 "ae": {k: v.cpu() for k, v in trainer.ae.state_dict().items()},
                 "config": trainer.config,
             }
