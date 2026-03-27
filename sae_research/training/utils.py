@@ -303,6 +303,18 @@ _DICT_REGISTRY: dict[str, tuple[type, list[str]]] = {
 }
 
 
+def _unwrap_checkpoint(path: str) -> dict:
+    """Load ae.pt, handling both raw state_dicts and training checkpoints.
+
+    trainSAE saves checkpoints as {"step": ..., "ae": {state_dict}, ...}.
+    from_pretrained expects a raw state_dict. This unwraps if needed.
+    """
+    checkpoint = t.load(path, map_location="cpu")
+    if "ae" in checkpoint and "encoder.weight" not in checkpoint:
+        return checkpoint["ae"]
+    return checkpoint
+
+
 def load_dictionary(base_path: str, device: str) -> tuple:
     ae_path = f"{base_path}/ae.pt"
     config_path = f"{base_path}/config.json"
@@ -321,7 +333,28 @@ def load_dictionary(base_path: str, device: str) -> tuple:
     for key in extra_keys:
         kwargs[key] = config["trainer"][key]
 
-    dictionary = cls.from_pretrained(ae_path, **kwargs)
+    # Unwrap checkpoint and instantiate directly instead of going through
+    # from_pretrained, which expects a file path with a raw state_dict.
+    state_dict = _unwrap_checkpoint(ae_path)
+
+    # Get dimensions from state_dict
+    if "encoder.weight" in state_dict:
+        dict_size, activation_dim = state_dict["encoder.weight"].shape
+    elif "decoder.weight" in state_dict:
+        activation_dim, dict_size = state_dict["decoder.weight"].shape
+    else:
+        raise ValueError(f"Cannot determine dimensions from state_dict keys: {list(state_dict.keys())}")
+
+    # Instantiate with constructor args
+    constructor_kwargs = {"activation_dim": activation_dim, "dict_size": dict_size}
+    for key in extra_keys:
+        constructor_kwargs[key] = config["trainer"][key]
+
+    dictionary = cls(**constructor_kwargs)
+    dictionary.load_state_dict(state_dict)
+    if device is not None:
+        dictionary.to(device)
+
     return dictionary, config
 
 

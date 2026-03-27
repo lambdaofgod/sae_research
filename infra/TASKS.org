@@ -485,46 +485,114 @@ temporary file-backed server.
 :EFFORT:   large
 :END:
 
-Migrate the sae_bench evaluation pipeline from DVC (=experiments/sae_bench/dvc.yaml=,
-14 stages) to a KFP v2 pipeline. Currently evaluations run locally via
-=dvc repro= — this moves them onto K8s so they can be triggered after training
-completes and results are logged to MLflow.
+Replace the DVC evaluation pipeline (=experiments/sae_bench/dvc.yaml=) with a
+KFP v2 pipeline on K8s. The legacy DVC pipeline mixed per-SAE evaluation with
+cross-model aggregation — these are separate concerns:
 
-The existing DVC pipeline has well-defined stages:
-1. =setup_saes= — load SAEs from HuggingFace, sae_bench, or local paths
-2. =core_eval= — KL divergence, CE loss, explained variance, L0
-3. =sparse_probing= — classification accuracy (top-k probing)
-4. =optional_evals= — SCR, TPP, absorption, unlearning (feature-specific)
-5. =extract_*= — 7 metric extraction stages (one per eval type)
-6. =aggregate_metrics= — combine into single report
+- *Evaluation* runs per-SAE, is automatable as a pipeline
+- *Aggregation/comparison* requires choosing which SAEs to compare — ad-hoc,
+  done in notebooks via =mlflow.search_runs()=
+
+** Design: eval reconciler
+
+The eval pipeline follows a reconciler pattern (desired state vs current state):
+
+*Desired state* — an eval config declaring which eval types every SAE should have:
+
+#+begin_example
+evaluations:
+  - core_eval        # KL divergence, CE loss, explained variance, L0
+  - sparse_probing   # classification accuracy (top-k probing)
+  - absorption       # feature absorption
+  - scr              # spurious correlation removal
+  - tpp              # targeted perturbation probing
+#+end_example
+
+*Current state* — MLflow. Each SAE's child run accumulates eval metric keys
+over time. Presence of a metric key = that eval was done.
+
+*Reconciliation* — a KFP pipeline that:
+1. Reads the eval config
+2. Queries MLflow for all SAE runs
+3. Computes the gap: which (SAE, eval_type) pairs are missing
+4. Works through gaps sequentially (one GPU — no fan-out)
+5. Logs results back to each SAE's MLflow child run
+
+This handles:
+- *New SAEs trained* — no metrics yet → gap filled automatically
+- *New eval type added* to config — missing everywhere → runs on all SAEs
+- *Eval code changed* — user triggers with =--force --eval-types sparse_probing=
+  (no automatic staleness detection — would require splitting packages into
+  separate training/eval images to track via container digest; not worth it
+  for a research project where eval code changes are deliberate and rare)
+
+*Required tags* — all eval logging requires explicit tags to prevent
+cross-contamination. At minimum =experiment_name= must be set (e.g.
+="topk_vs_batchtopk_march2024"=, ="smoke_test"=). The =log_eval_to_mlflow()=
+function enforces this. Tags enable filtering runs by experiment campaign
+in MLflow UI and =search_runs()= queries.
+
+*Manual/targeted mode* — same pipeline, optional filter parameters:
+- =--experiment-name= (required) → tag for this eval campaign
+- =--run-ids X Y Z= → only these SAEs
+- =--eval-types sparse_probing absorption= → only these eval types
+- =--force= → rerun even if metrics already exist
+- No run-ids/eval-types → full reconciliation (discover all gaps)
+
+Can be triggered manually or on a schedule.
+
+** DONE Eval components as standalone functions + smoke test
+Standalone eval components in =sae_research/eval/=:
+- =sae_wrapper.py= — =DictionaryLearningSAEWrapper(BaseSAE)= wraps any
+  dictionary_learning autoencoder for sae_bench. =load_sae_for_eval()=
+  loads ae.pt + config.json and wraps automatically.
+- =components.py= — =run_core_eval()= wraps =sae_bench.evals.core.main=,
+  =extract_core_metrics()= flattens results for MLflow logging.
+
+Smoke test (=smoke_tests/smoke_test_eval.py=, ~8s CPU):
+1. Trains tiny BatchTopK SAE (pythia-70m dims, 5 steps, random data)
+2. Pulls ae.pt + config.json from MLflow artifacts
+3. Loads via =load_sae_for_eval()=
+4. Runs sae_bench core eval (1 batch, CPU)
+5. Extracts + logs metrics to MLflow, verifies presence
+
+Also fixed =training/utils.py:load_dictionary()= to handle checkpoint
+wrapping (=trainSAE= saves ={\"ae\": state_dict}=, =from_pretrained=
+expects raw state_dict). Training smoke test updated to use pythia-70m
+dimensions so SAE is evaluable by sae_bench.
 
 ** TODO Package sae_bench as container image
 Build Docker image with =sae-bench==0.4.2=, =sae-lens=, =dictionary-learning=,
 and custom SAE classes (=thresholding_sae=, =matching_pursuit_sae=,
-=dictionary_learning_adapters=). Similar to activault-flashattn image.
+=dictionary_learning_adapters=). Separate from training image.
 
-** TODO Port DVC stages to KFP components
-Convert each DVC stage (=scripts/*.py=) into =@dsl.component= functions.
-Key scripts to port:
+** TODO Build eval KFP pipeline with reconciler
+Implement the reconciler pipeline:
+- KFP component that queries MLflow for (SAE, eval_type) gap matrix
+- KFP component that runs a single eval type on a single SAE, logs to MLflow
+- Pipeline orchestrates: gap discovery → sequential eval execution
+- Pipeline parameters: =--run-ids=, =--eval-types=, =--force=
+
+Key scripts to adapt from DVC pipeline (=experiments/sae_bench/scripts/=):
 - =setup_saes.py= (419 lines) — SAE loading from 3 sources
 - =run_core_eval.py= (118 lines) — core evaluation
 - =run_optional_evals.py= (239 lines) — optional evals
 - =extract_metrics.py= (323 lines) — metric extraction
-- =aggregate_metrics.py= — aggregation into final report
 
-Preserve the =params.yaml= configuration pattern — expose as KFP pipeline
-parameters.
+Aggregation (=aggregate_metrics.py=) is NOT part of the pipeline — it becomes
+ad-hoc notebook work querying MLflow.
 
 ** TODO Wire MLflow into evaluation pipeline
 Log eval metrics to the MLflow child run that produced the SAE being evaluated.
-=experiments/sae_bench/= currently writes to =metrics/*.json= — add MLflow
-logging so eval results are queryable via =mlflow.search_runs()=. Link eval
-runs to training runs via =mlflow.parentRunId= tag or run ID artifact.
+=experiments/sae_bench/= currently writes to =metrics/*.json= — replace with
+MLflow logging so eval results are queryable via =mlflow.search_runs()=.
+Link eval runs to training runs via run ID tag.
 
-** TODO Trigger evaluation after training
-KFP pipeline composition: training pipeline produces SAE artifacts, evaluation
-pipeline consumes them. Can be a single combined pipeline or separate pipelines
-linked by artifact contract (=ae.pt= + =config.json=).
+** TODO Comparison/aggregation notebooks
+Notebook(s) for ad-hoc cross-model comparison, replacing =aggregate_metrics.py=.
+Query MLflow via =mlflow.search_runs()= with filters (architecture, layer,
+eval type), produce tables and plots. This is deliberately not a pipeline —
+choosing which SAEs to compare is a research decision, not an automated step.
 
 * TODO [#B] Training Operator v2                            :infra:training:
 :PROPERTIES:

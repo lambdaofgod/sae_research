@@ -98,11 +98,16 @@ def run_smoke_test(tracking_uri: str):
     try:
         mlflow.set_tracking_uri(tracking_uri)
 
+        # Use pythia-70m dimensions so the SAE can be evaluated by sae_bench
+        model_name = "EleutherAI/pythia-70m-deduped"
+        activation_dim = 512  # pythia-70m hidden_size
+        layer = 3
+
         # Create parent sweep run
         parent_run = start_sweep_run(
             experiment_name="smoke_test",
-            model_name="test_model",
-            layers=[0],
+            model_name=model_name,
+            layers=[layer],
             architectures=["batch_top_k"],
             run_cfg={"num_tokens": 100},
         )
@@ -114,12 +119,12 @@ def run_smoke_test(tracking_uri: str):
             architectures=["batch_top_k"],
             learning_rates=[1e-4],
             seeds=[0],
-            activation_dim=64,
-            dict_sizes=[128],
-            model_name="test_model",
+            activation_dim=activation_dim,
+            dict_sizes=[1024],
+            model_name=model_name,
             device="cpu",
-            layer=0,
-            submodule_name="test",
+            layer=layer,
+            submodule_name=f"resid_post_layer_{layer}",
             steps=100,
             warmup_steps=1,
             sparsity_warmup_steps=1,
@@ -131,7 +136,7 @@ def run_smoke_test(tracking_uri: str):
 
         def dummy_data():
             while True:
-                yield t.randn(32, 64)
+                yield t.randn(32, activation_dim)
 
         mlflow_run_ids = trainSAE(
             data=dummy_data(),
