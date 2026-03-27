@@ -443,57 +443,87 @@ logs a warning (steps reached vs requested) and falls through to the final
 save block. Final checkpoint now records =actual_steps= instead of =steps=.
 
 
-* TODO [#B] MLflow — experiment tracking                         :tracking:
+* DONE [#B] MLflow — experiment tracking                         :tracking:
 :PROPERTIES:
 :EFFORT:   large
 :END:
 
-Pre-MLflow: experiment tracking is WandB-only (via =trackio= in =training.py=),
-results land as scattered =eval_results.json= files per trainer, and comparing
-across runs requires manually digging through directories like
-=saes_<model>_<archs>/resid_post_layer_N/trainer_N/=.
+Replaced WandB/trackio with MLflow. Parent/child run hierarchy: parent = sweep
+(one =runner.py= invocation), children = individual trainer configs.
 
-sae_bench evaluation pipeline uses DVC (being replaced by KFP).
+=mlflow_logging.py= provides the logging helpers. =trainSAE()= creates child
+runs per trainer, logs metrics per step, logs =ae.pt= + =config.json= as
+artifacts. =eval_saes()= logs eval metrics back to child runs.
 
-** TODO Deploy MLflow server on K8s
-- PostgreSQL backend store
-- Garage as artifact store (reuse existing S3 infra)
-- Expose via proxy (extend existing nginx proxy from activault chart)
-- Helm chart or add to existing activault chart
+** DONE Deploy MLflow server on K8s
+Added to activault Helm chart:
+- =statefulset-postgres.yaml= — PostgreSQL 16 (10Gi PVC)
+- =deployment-mlflow.yaml= — MLflow tracking server (postgres backend, Garage S3 artifacts)
+- =secret-mlflow.yaml= — auto-generated DB credentials
+- Bootstrap job creates =mlflow-artifacts= bucket in Garage
+- Proxy entry on port 8085
 
-** TODO Define SAE experiment logging conventions
-Standardize what gets logged per training run so runs are queryable/comparable.
+** DONE Define SAE experiment logging conventions
+Encoded in =mlflow_logging.py=. Params: model_name, layer, submodule_name,
+trainer_class, dict_class, dict_size, lr, seed, architecture-specific (k, l1_penalty,
+target_l0, etc.). Metrics per step: L0, loss, frac_variance_explained, trainer
+logging params. Eval metrics prefixed with =eval_=.
 
-Params to log (from =config.py= =get_trainer_configs()=):
-- model_name, layer, architecture type
-- dictionary_width, learning_rate, seed
-- sparsity_penalty / target_L0 (architecture-dependent)
-- num_tokens, sae_batch_size, context_length, dtype
-- activault vs LLM-generated activations
-- hook point name
+** DONE Wire MLflow into training loop
+Removed =trackio= dependency and all WandB multiprocessing code (=mp.Queue=,
+=mp.Process=, =new_wandb_process()=). MLflow client is thread-safe — logs
+directly in the training loop. =--use_mlflow= flag replaces =--use_wandb=.
 
-Metrics to log (from =training.py= =trainSAE()= loop):
-- L0, loss, frac_variance_explained (logged per step already to WandB)
-- dead_features count
-- Final eval: loss_recovered, L0, MMCS (from =runner.py= =eval_saes()=)
+** DONE Smoke test
+=test/test_mlflow_training_smoke.py=: starts local file-backed MLflow server,
+runs =trainSAE()= with =steps=5= on CPU, asserts parent/child runs, metrics,
+and artifacts are logged. All 5 assertions pass.
 
-Use parent/child runs: parent = sweep (one =runner.py= invocation), children =
-individual trainer configs. =mlflow.search_runs()= for filtering across sweeps.
+* TODO [#B] KFP evaluation pipeline — sae_bench on K8s     :infra:eval:
+:PROPERTIES:
+:EFFORT:   large
+:END:
 
-** TODO Wire MLflow into training loop
-Replace or supplement the WandB multiprocessing logger in =training.py= lines
-22-32. Each trainer spawns a =mp.Process= for WandB — MLflow logging
-could go in the same loop (=training.py= lines 140-180 where metrics are
-already computed per step).
+Migrate the sae_bench evaluation pipeline from DVC (=experiments/sae_bench/dvc.yaml=,
+14 stages) to a KFP v2 pipeline. Currently evaluations run locally via
+=dvc repro= — this moves them onto K8s so they can be triggered after training
+completes and results are logged to MLflow.
 
-Log final =ae.pt= as MLflow artifact (following the artifact contract) so
-models are discoverable without knowing the filesystem path. Log =config.json=
-as artifact.
+The existing DVC pipeline has well-defined stages:
+1. =setup_saes= — load SAEs from HuggingFace, sae_bench, or local paths
+2. =core_eval= — KL divergence, CE loss, explained variance, L0
+3. =sparse_probing= — classification accuracy (top-k probing)
+4. =optional_evals= — SCR, TPP, absorption, unlearning (feature-specific)
+5. =extract_*= — 7 metric extraction stages (one per eval type)
+6. =aggregate_metrics= — combine into single report
 
-** TODO Wire MLflow into sae_bench evaluation pipeline
-=experiments/sae_bench/= extracts metrics to =metrics/*.json=. Add MLflow
-logging so eval results link back to the training run that produced the SAE.
-This wiring happens as part of the DVC → KFP migration for eval.
+** TODO Package sae_bench as container image
+Build Docker image with =sae-bench==0.4.2=, =sae-lens=, =dictionary-learning=,
+and custom SAE classes (=thresholding_sae=, =matching_pursuit_sae=,
+=dictionary_learning_adapters=). Similar to activault-flashattn image.
+
+** TODO Port DVC stages to KFP components
+Convert each DVC stage (=scripts/*.py=) into =@dsl.component= functions.
+Key scripts to port:
+- =setup_saes.py= (419 lines) — SAE loading from 3 sources
+- =run_core_eval.py= (118 lines) — core evaluation
+- =run_optional_evals.py= (239 lines) — optional evals
+- =extract_metrics.py= (323 lines) — metric extraction
+- =aggregate_metrics.py= — aggregation into final report
+
+Preserve the =params.yaml= configuration pattern — expose as KFP pipeline
+parameters.
+
+** TODO Wire MLflow into evaluation pipeline
+Log eval metrics to the MLflow child run that produced the SAE being evaluated.
+=experiments/sae_bench/= currently writes to =metrics/*.json= — add MLflow
+logging so eval results are queryable via =mlflow.search_runs()=. Link eval
+runs to training runs via =mlflow.parentRunId= tag or run ID artifact.
+
+** TODO Trigger evaluation after training
+KFP pipeline composition: training pipeline produces SAE artifacts, evaluation
+pipeline consumes them. Can be a single combined pipeline or separate pipelines
+linked by artifact contract (=ae.pt= + =config.json=).
 
 * TODO [#B] Training Operator v2                            :infra:training:
 :PROPERTIES:
@@ -556,11 +586,6 @@ KFP UI per run. Follow the same pattern as the activault collection pipeline:
 *** TODO MLflow integration
 Inject =MLFLOW_TRACKING_URI= + =MLFLOW_S3_ENDPOINT_URL= via K8s secrets.
 Pass =run_id= downstream as KFP artifact to link pipeline steps.
-
-** TODO Create KFP evaluation pipeline
-Separate pipeline that takes SAE artifacts (following the artifact contract)
-and runs sae_bench evals. Decoupled from training — can evaluate any SAE
-regardless of how it was produced.
 
 ** TODO Install Kueue for GPU admission control
 So submitted TrainJobs queue behind each other instead of fighting for GPUs.

@@ -1,0 +1,152 @@
+{{- if .Values.garage.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "activault.fullname" . }}-garage-bootstrap
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: python:3.12-alpine
+          command:
+            - python3
+            - -c
+            - |
+              import json, os, time, urllib.request, urllib.error, sys
+
+              ADMIN = "http://{{ .Release.Name }}-garage-0.{{ .Release.Name }}-garage-headless:3903"
+              TOKEN = os.environ["GARAGE_ADMIN_TOKEN"]
+              ACCESS_KEY = os.environ["AWS_ACCESS_KEY_ID"]
+              SECRET_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
+              HEADERS = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
+
+              def api(method, path, data=None):
+                  body = json.dumps(data).encode() if data is not None else None
+                  req = urllib.request.Request(f"{ADMIN}{path}", data=body, headers=HEADERS, method=method)
+                  try:
+                      resp = urllib.request.urlopen(req)
+                      raw = resp.read()
+                      return json.loads(raw) if raw.strip() else {}
+                  except urllib.error.HTTPError as e:
+                      err = e.read().decode()
+                      print(f"  HTTP {e.code} on {path}: {err.strip()}")
+                      try:
+                          return json.loads(err)
+                      except Exception:
+                          return {}
+
+              # wait for garage to be reachable
+              for i in range(60):
+                  try:
+                      req = urllib.request.Request(f"{ADMIN}/health", headers=HEADERS)
+                      urllib.request.urlopen(req)
+                      break
+                  except urllib.error.HTTPError:
+                      break  # 503 = reachable but no layout yet, that's fine
+                  except Exception:
+                      print(f"Waiting for Garage... ({i+1}/60)")
+                      time.sleep(2)
+              else:
+                  sys.exit("Garage not reachable after 120s")
+
+              print("Garage reachable")
+
+              # --- Layout ---
+              status = api("GET", "/v2/GetClusterStatus")
+              nodes = status.get("nodes", [])
+              unassigned = [n["id"] for n in nodes if n.get("role") is None]
+
+              if unassigned:
+                  print(f"Assigning layout to {len(unassigned)} node(s)")
+                  for nid in unassigned:
+                      print(f"  node: {nid[:16]}...")
+                  roles = [{"id": nid, "zone": "dc1", "capacity": 214748364800, "tags": []} for nid in unassigned]
+                  api("POST", "/v2/UpdateClusterLayout", {"roles": roles})
+
+                  layout = api("GET", "/v2/GetClusterLayout")
+                  version = layout.get("version", 0) + 1
+                  print(f"Applying layout version {version}")
+                  api("POST", "/v2/ApplyClusterLayout", {"version": version})
+
+                  # wait for healthy
+                  for i in range(30):
+                      try:
+                          req = urllib.request.Request(f"{ADMIN}/health", headers=HEADERS)
+                          resp = urllib.request.urlopen(req)
+                          print("Cluster healthy")
+                          break
+                      except Exception:
+                          time.sleep(2)
+              else:
+                  print("All nodes already have roles")
+
+              # --- Key ---
+              key_name = "{{ .Values.s3.keyName | default "activault-key" }}"
+              keys = api("GET", "/v2/ListKeys")
+              existing = [k for k in (keys if isinstance(keys, list) else []) if k.get("name") == key_name]
+              if existing:
+                  print(f"Key '{key_name}' already exists")
+              else:
+                  print(f"Importing key '{key_name}'")
+                  api("POST", "/v2/ImportKey", {
+                      "accessKeyId": ACCESS_KEY,
+                      "secretAccessKey": SECRET_KEY,
+                      "name": key_name,
+                  })
+
+              # --- Buckets ---
+              def ensure_bucket(bucket_name):
+                  buckets = api("GET", "/v2/ListBuckets")
+                  bucket_id = None
+                  for b in (buckets if isinstance(buckets, list) else []):
+                      if bucket_name in b.get("globalAliases", []):
+                          bucket_id = b["id"]
+                          break
+
+                  if bucket_id:
+                      print(f"Bucket '{bucket_name}' already exists: {bucket_id[:16]}...")
+                  else:
+                      print(f"Creating bucket '{bucket_name}'")
+                      resp = api("POST", "/v2/CreateBucket", {})
+                      bucket_id = resp.get("id", "")
+                      print(f"Created bucket: {bucket_id[:16]}...")
+                      api("POST", "/v2/AddBucketAlias", {"bucketId": bucket_id, "globalAlias": bucket_name})
+
+                  if bucket_id:
+                      print(f"Granting key permissions on '{bucket_name}'")
+                      api("POST", "/v2/AllowBucketKey", {
+                          "bucketId": bucket_id,
+                          "accessKeyId": ACCESS_KEY,
+                          "permissions": {"read": True, "write": True, "owner": True},
+                      })
+
+              ensure_bucket("{{ .Values.s3.bucketName | default "activations" }}")
+              {{- if .Values.mlflow.enabled }}
+              ensure_bucket("{{ .Values.mlflow.artifactBucket }}")
+              {{- end }}
+
+              print("Garage bootstrap complete")
+          env:
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-garage-rpc-secret
+                  key: adminToken
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "activault.fullname" . }}-s3-creds
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "activault.fullname" . }}-s3-creds
+                  key: AWS_SECRET_ACCESS_KEY
+{{- end }}

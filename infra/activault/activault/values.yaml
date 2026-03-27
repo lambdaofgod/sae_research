@@ -1,0 +1,71 @@
+# ── Garage ────────────────────────────────────────────────────────────────────
+garage:
+  enabled: true
+  garage:
+    replicationFactor: 1         # bump to 3 for redundancy (requires >= 3 replicas)
+    # adminToken: auto-generated and stored in K8s Secret (garage-rpc-secret)
+  deployment:
+    replicaCount: 1             # must be >= replicationMode
+  monitoring:
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        interval: 15s
+  persistence:
+    data:
+      size: 1200Gi
+    meta:
+      size: 1Gi
+
+# ── S3 credentials ───────────────────────────────────────────────────────────
+# accessKey/secretKey: auto-generated and stored in K8s Secret (activault-s3-creds)
+s3:
+  endpoint: "http://activault-garage.default:3900"    # FQDN so it resolves from kubeflow namespace too
+  region: "garage"                           # must match Garage s3.api.region
+
+# ── Activault exporter ─────────────────────────────────────────────────────
+exporter:
+  enabled: true
+  image: activault-exporter:latest
+  bucket: "activations"
+  pollInterval: "300"        # seconds between S3 list refreshes
+  scrapeInterval: "60s"
+
+# ── PostgreSQL (MLflow backend store) ─────────────────────────────────────
+postgres:
+  image: postgres:16-alpine
+  storage: 10Gi
+  # password: auto-generated and stored in K8s Secret
+
+# ── MLflow tracking server ────────────────────────────────────────────────
+mlflow:
+  enabled: true
+  image: ghcr.io/mlflow/mlflow:v3.10.1
+  artifactBucket: "mlflow-artifacts"
+
+# ── UI proxy ────────────────────────────────────────────────────────────────
+# Single nginx pod that forwards each port to a service.
+# Access all UIs with one port-forward:
+#   kubectl port-forward --address 0.0.0.0 svc/activault-proxy 8081:8081 8082:8082 8083:8083
+proxy:
+  enabled: true
+  services:
+    - name: dashboard
+      port: 8081
+      upstream: "kubernetes-dashboard.kubernetes-dashboard.svc:80"
+    - name: kfp
+      port: 8082
+      upstream: "ml-pipeline-ui.kubeflow.svc:80"
+    - name: garage-admin
+      port: 8083
+      upstream: "activault-garage-0.activault-garage-headless.default.svc:3903"
+    - name: garage-s3
+      port: 8084
+      upstream: "activault-garage.default.svc:3900"
+    - name: mlflow
+      port: 8085
+      upstream: "activault-mlflow.default.svc:5000"
+    - name: grafana
+      port: 8086
+      upstream: "kube-prometheus-stack-grafana.monitoring.svc:80"

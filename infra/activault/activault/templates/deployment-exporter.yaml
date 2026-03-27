@@ -1,0 +1,71 @@
+{{- if .Values.exporter.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "activault.fullname" . }}-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "activault.fullname" . }}-exporter
+  template:
+    metadata:
+      labels:
+        app: {{ include "activault.fullname" . }}-exporter
+    spec:
+      containers:
+        - name: exporter
+          image: {{ .Values.exporter.image }}
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 9400
+              name: metrics
+          env:
+            - name: S3_ENDPOINT
+              value: {{ .Values.s3.endpoint | quote }}
+            - name: S3_BUCKET
+              value: {{ .Values.exporter.bucket | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "activault.fullname" . }}-s3-creds
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "activault.fullname" . }}-s3-creds
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.s3.region | quote }}
+            - name: POLL_INTERVAL
+              value: {{ .Values.exporter.pollInterval | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "activault.fullname" . }}-exporter
+  labels:
+    app: {{ include "activault.fullname" . }}-exporter
+spec:
+  selector:
+    app: {{ include "activault.fullname" . }}-exporter
+  ports:
+    - port: 9400
+      name: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "activault.fullname" . }}-exporter
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "activault.fullname" . }}-exporter
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.exporter.scrapeInterval | default "60s" }}
+      path: /metrics
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+{{- end }}
