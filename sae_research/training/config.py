@@ -167,7 +167,7 @@ dictionary_widths = _defaults_cfg["dictionary_widths"]
 learning_rates = _defaults_cfg["learning_rates"]
 remove_bos = _defaults_cfg["remove_bos"]
 max_activation_norm_multiple = _defaults_cfg["max_activation_norm_multiple"]
-wandb_project = _defaults_cfg["wandb_project"]
+mlflow_experiment = _defaults_cfg["mlflow_experiment"]
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +183,6 @@ class BaseTrainerConfig:
     submodule_name: str
     trainer: Type[Any]
     dict_class: Type[Any]
-    wandb_name: str
     warmup_steps: int
     steps: int
     decay_start: Optional[int]
@@ -346,7 +345,6 @@ def get_trainer_configs(
                 dict_size=dict_size,
                 seed=seed,
                 initial_sparsity_penalty=sparsity_penalty,
-                wandb_name=f"PAnnealTrainer-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 
@@ -363,7 +361,6 @@ def get_trainer_configs(
                 dict_size=dict_size,
                 seed=seed,
                 l1_penalty=l1_penalty,
-                wandb_name=f"StandardTrainer-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 
@@ -380,7 +377,6 @@ def get_trainer_configs(
                 dict_size=dict_size,
                 seed=seed,
                 l1_penalty=l1_penalty,
-                wandb_name=f"StandardTrainerNew-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 
@@ -397,7 +393,6 @@ def get_trainer_configs(
                 dict_size=dict_size,
                 seed=seed,
                 l1_penalty=l1_penalty,
-                wandb_name=f"GatedTrainer-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 
@@ -414,7 +409,6 @@ def get_trainer_configs(
                 seed=seed,
                 k=k,
                 k_anneal_steps=anneal_end,
-                wandb_name=f"TopKTrainer-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 
@@ -431,7 +425,6 @@ def get_trainer_configs(
                 seed=seed,
                 k=k,
                 k_anneal_steps=anneal_end,
-                wandb_name=f"BatchTopKTrainer-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 
@@ -448,7 +441,6 @@ def get_trainer_configs(
                 seed=seed,
                 k=k,
                 k_anneal_steps=anneal_end,
-                wandb_name=f"MatryoshkaBatchTopKTrainer-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 
@@ -465,7 +457,6 @@ def get_trainer_configs(
                 dict_size=dict_size,
                 seed=seed,
                 target_l0=target_l0,
-                wandb_name=f"JumpReluTrainer-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 
@@ -482,7 +473,6 @@ def get_trainer_configs(
                 seed=seed,
                 k=k,
                 k_anneal_steps=anneal_end,
-                wandb_name=f"ThresholdingTopKTrainer-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 
@@ -502,7 +492,6 @@ def get_trainer_configs(
                 seed=seed,
                 s=s,
                 s_anneal_steps=anneal_end,
-                wandb_name=f"MatchingPursuitTrainer-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 
@@ -522,7 +511,6 @@ def get_trainer_configs(
                 seed=seed,
                 k_values=k_values,
                 k_weights=k_weights,
-                wandb_name=f"NestedThresholdingTopKTrainer-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 
@@ -542,7 +530,6 @@ def get_trainer_configs(
                 seed=seed,
                 k_values=k_values,
                 k_weights=k_weights,
-                wandb_name=f"StiefelNestedThresholdingTopKTrainer-{model_name}-{submodule_name}",
             )
             trainer_configs.append(asdict(config))
 

@@ -475,9 +475,10 @@ Removed =trackio= dependency and all WandB multiprocessing code (=mp.Queue=,
 directly in the training loop. =--use_mlflow= flag replaces =--use_wandb=.
 
 ** DONE Smoke test
-=test/test_mlflow_training_smoke.py=: starts local file-backed MLflow server,
-runs =trainSAE()= with =steps=5= on CPU, asserts parent/child runs, metrics,
-and artifacts are logged. All 5 assertions pass.
+=smoke_tests/smoke_test_mlflow_training.py=: runs =trainSAE()= with =steps=5=
+on CPU, asserts parent/child runs, metrics, and artifacts are logged.
+Defaults to K8s MLflow (=--backend=kubernetes=), =--backend=local= for a
+temporary file-backed server.
 
 * TODO [#B] KFP evaluation pipeline — sae_bench on K8s     :infra:eval:
 :PROPERTIES:

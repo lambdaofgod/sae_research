@@ -9,4 +9,4 @@ learning_rates: [0.0001]
 remove_bos: true
 max_activation_norm_multiple: 10
 
-wandb_project: dictionary_learning_demo_sae_training
+mlflow_experiment: sae_training

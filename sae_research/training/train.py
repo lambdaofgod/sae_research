@@ -3,33 +3,22 @@ Training dictionaries
 """
 
 import json
-import torch.multiprocessing as mp
 import os
-from queue import Empty
 from typing import Optional
 from contextlib import nullcontext
 
 import torch as t
 from tqdm import tqdm
 
-import trackio as wandb
-
 from dictionary_learning.dictionary import AutoEncoder
 from dictionary_learning.evaluation import evaluate
 from dictionary_learning.trainers.standard import StandardTrainer
 
-
-def new_wandb_process(config, log_queue, entity, project):
-    wandb.init(project=project, config=config, name=config["wandb_name"])
-    while True:
-        try:
-            log = log_queue.get(timeout=1)
-            if log == "DONE":
-                break
-            wandb.log(log)
-        except Empty:
-            continue
-    wandb.finish()
+from sae_research.training.mlflow_logging import (
+    start_trainer_run,
+    log_step_metrics,
+    log_artifacts,
+)
 
 
 def log_stats(
@@ -38,7 +27,7 @@ def log_stats(
     act: t.Tensor,
     activations_split_by_head: bool,
     transcoder: bool,
-    log_queues: list=[],
+    mlflow_run_ids: list[str] = [],
     verbose: bool=False,
 ):
     with t.no_grad():
@@ -58,7 +47,7 @@ def log_stats(
                 total_variance = t.var(act, dim=0).sum()
                 residual_variance = t.var(act - act_hat, dim=0).sum()
                 frac_variance_explained = 1 - residual_variance / total_variance
-                log[f"frac_variance_explained"] = frac_variance_explained.item()
+                log["frac_variance_explained"] = frac_variance_explained.item()
             else:  # transcoder
                 x, x_hat, f, losslog = trainer.loss(act, step=step, logging=True)
 
@@ -69,23 +58,23 @@ def log_stats(
                 print(f"Step {step}: L0 = {l0}, frac_variance_explained = {frac_variance_explained}")
 
             # log parameters from training
-            log.update({f"{k}": v.cpu().item() if isinstance(v, t.Tensor) else v for k, v in losslog.items()})
-            log[f"l0"] = l0
+            log.update({k: v.cpu().item() if isinstance(v, t.Tensor) else v for k, v in losslog.items()})
+            log["l0"] = l0
             trainer_log = trainer.get_logging_parameters()
             for name, value in trainer_log.items():
                 if isinstance(value, t.Tensor):
                     value = value.cpu().item()
-                log[f"{name}"] = value
+                log[name] = value
 
-            if log_queues:
-                log_queues[i].put(log)
+            if mlflow_run_ids:
+                log_step_metrics(mlflow_run_ids[i], log, step)
 
 def get_norm_factor(data, steps: int) -> float:
     """Per Section 3.1, find a fixed scalar factor so activation vectors have unit mean squared norm.
     This is very helpful for hyperparameter transfer between different layers and models.
     Use more steps for more accurate results.
     https://arxiv.org/pdf/2408.05147
-    
+
     If experiencing troubles with hyperparameter transfer between models, it may be worth instead normalizing to the square root of d_model.
     https://transformer-circuits.pub/2024/april-update/index.html#training-saes"""
     total_mean_squared_norm = 0
@@ -104,7 +93,7 @@ def get_norm_factor(data, steps: int) -> float:
 
     print(f"Average mean squared norm: {average_mean_squared_norm}")
     print(f"Norm factor: {norm_factor}")
-    
+
     return norm_factor
 
 
@@ -113,9 +102,8 @@ def trainSAE(
     data,
     trainer_configs: list[dict],
     steps: int,
-    use_wandb:bool=False,
-    wandb_entity:str="",
-    wandb_project:str="",
+    use_mlflow: bool = False,
+    mlflow_parent_run_id: Optional[str] = None,
     save_steps:Optional[list[int]]=None,
     save_dir:Optional[str]=None,
     log_steps:Optional[int]=None,
@@ -143,32 +131,20 @@ def trainSAE(
 
     trainers = []
     for i, config in enumerate(trainer_configs):
-        if "wandb_name" in config:
-            config["wandb_name"] = f"{config['wandb_name']}_trainer_{i}"
         trainer_class = config["trainer"]
         del config["trainer"]
         trainers.append(trainer_class(**config))
 
-    wandb_processes = []
-    log_queues = []
-
-    if use_wandb:
-        # Note: If encountering wandb and CUDA related errors, try setting start method to spawn in the if __name__ == "__main__" block
-        # https://docs.python.org/3/library/multiprocessing.html#multiprocessing.set_start_method
-        # Everything should work fine with the default fork method but it may not be as robust
+    # Start MLflow child runs per trainer
+    mlflow_run_ids = []
+    if use_mlflow:
         for i, trainer in enumerate(trainers):
-            log_queue = mp.Queue()
-            log_queues.append(log_queue)
-            wandb_config = trainer.config | run_cfg
-            # Make sure wandb config doesn't contain any CUDA tensors
-            wandb_config = {k: v.cpu().item() if isinstance(v, t.Tensor) else v 
-                          for k, v in wandb_config.items()}
-            wandb_process = mp.Process(
-                target=new_wandb_process,
-                args=(wandb_config, log_queue, wandb_entity, wandb_project),
+            run = start_trainer_run(
+                parent_run_id=mlflow_parent_run_id,
+                trainer_index=i,
+                trainer_config=trainer.config | run_cfg,
             )
-            wandb_process.start()
-            wandb_processes.append(wandb_process)
+            mlflow_run_ids.append(run.info.run_id)
 
     # make save dirs, export config
     if save_dir is not None:
@@ -219,9 +195,10 @@ def trainSAE(
             actual_steps = step
 
             # logging
-            if (use_wandb or verbose) and step % log_steps == 0:
+            if (use_mlflow or verbose) and step % log_steps == 0:
                 log_stats(
-                    trainers, step, act, activations_split_by_head, transcoder, log_queues=log_queues, verbose=verbose
+                    trainers, step, act, activations_split_by_head, transcoder,
+                    mlflow_run_ids=mlflow_run_ids, verbose=verbose,
                 )
 
             # saving
@@ -285,9 +262,10 @@ def trainSAE(
                 checkpoint["norm_factor"] = norm_factor
             t.save(checkpoint, os.path.join(save_dir, "ae.pt"))
 
-    # Signal wandb processes to finish
-    if use_wandb:
-        for queue in log_queues:
-            queue.put("DONE")
-        for process in wandb_processes:
-            process.join()
+    # Log final artifacts to MLflow
+    if use_mlflow:
+        for run_id, dir in zip(mlflow_run_ids, save_dirs):
+            if dir is not None:
+                log_artifacts(run_id, dir)
+
+    return mlflow_run_ids

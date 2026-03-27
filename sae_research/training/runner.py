@@ -9,7 +9,6 @@ import argparse
 import itertools
 import random
 import json
-import torch.multiprocessing as mp
 import time
 import huggingface_hub
 from datasets import config
@@ -33,7 +32,7 @@ def get_args():
     parser.add_argument(
         "--save_dir", type=str, required=True, help="where to store sweep"
     )
-    parser.add_argument("--use_wandb", action="store_true", help="use wandb logging")
+    parser.add_argument("--mlflow", default=True, action=argparse.BooleanOptionalAction, help="log to MLflow (default: True)")
     parser.add_argument("--dry_run", action="store_true", help="dry run sweep")
     parser.add_argument(
         "--save_checkpoints", action="store_true", help="save checkpoints"
@@ -80,7 +79,8 @@ def run_sae_training(
     dictionary_widths: list[int],
     learning_rates: list[float],
     dry_run: bool = False,
-    use_wandb: bool = False,
+    use_mlflow: bool = True,
+    mlflow_parent_run_id: str = None,
     save_checkpoints: bool = False,
     buffer_tokens: int = 250_000,
     mixed_dataset: bool = False,
@@ -98,7 +98,7 @@ def run_sae_training(
     num_buffer_inputs = buffer_tokens // context_length
     print(f"buffer_size: {num_buffer_inputs}, buffer_size_in_tokens: {buffer_tokens}")
 
-    log_steps = 100  # Log the training on wandb or print to console every log_steps
+    log_steps = 100  # Log metrics every log_steps
 
     steps = int(num_tokens / sae_batch_size)  # Total number of batches to train
 
@@ -195,20 +195,22 @@ def run_sae_training(
 
     if not dry_run:
         # actually run the sweep
-        trainSAE(
+        mlflow_run_ids = trainSAE(
             data=activation_buffer,
             trainer_configs=trainer_configs,
-            use_wandb=use_wandb,
+            use_mlflow=use_mlflow,
+            mlflow_parent_run_id=mlflow_parent_run_id,
             steps=steps,
             save_steps=save_steps,
             save_dir=save_dir,
             log_steps=log_steps,
-            wandb_project=demo_config.wandb_project,
             normalize_activations=True,
             verbose=False,
             autocast_dtype=t.bfloat16,
             backup_steps=1000,
         )
+        return mlflow_run_ids
+    return []
 
 
 @t.no_grad()
@@ -219,6 +221,7 @@ def eval_saes(
     device: str,
     overwrite_prev_results: bool = False,
     transcoder: bool = False,
+    mlflow_run_ids: list[str] = None,
 ) -> dict:
     random.seed(demo_config.random_seeds[0])
     t.manual_seed(demo_config.random_seeds[0])
@@ -265,7 +268,7 @@ def eval_saes(
 
     eval_results = {}
 
-    for ae_path in ae_paths:
+    for idx, ae_path in enumerate(ae_paths):
         output_filename = f"{ae_path}/eval_results.json"
         if not overwrite_prev_results:
             if os.path.exists(output_filename):
@@ -316,6 +319,11 @@ def eval_saes(
         with open(output_filename, "w") as f:
             json.dump(eval_results, f)
 
+        # Log eval metrics to the corresponding MLflow child run
+        if mlflow_run_ids and idx < len(mlflow_run_ids):
+            from sae_research.training.mlflow_logging import log_eval_metrics
+            log_eval_metrics(mlflow_run_ids[idx], eval_results)
+
     # return the final eval_results for testing purposes
     return eval_results
 
@@ -332,9 +340,8 @@ def push_to_huggingface(save_dir: str, repo_id: str):
 
 
 if __name__ == "__main__":
-    """python demo.py --save_dir run2 --model_name EleutherAI/pythia-70m-deduped --layers 3 --architectures standard jump_relu batch_top_k top_k gated --use_wandb
-    python demo.py --save_dir run3 --model_name google/gemma-2-2b --layers 12 --architectures standard top_k --use_wandb
-    python demo.py --save_dir jumprelu --model_name EleutherAI/pythia-70m-deduped --layers 3 --architectures jump_relu --use_wandb"""
+    """python runner.py --save_dir run2 --model_name EleutherAI/pythia-70m-deduped --layers 3 --architectures standard jump_relu batch_top_k top_k gated
+    python runner.py --save_dir run3 --model_name google/gemma-2-2b --layers 12 --architectures standard top_k"""
     args = get_args()
 
     hf_repo_id = args.hf_repo_id
@@ -344,9 +351,6 @@ if __name__ == "__main__":
 
     # This prevents random CUDA out of memory errors
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
-    # For wandb to work with multiprocessing
-    mp.set_start_method("spawn", force=True)
 
     # Rarely I have internet issues on cloud GPUs and then the streaming read fails
     # Hopefully the outage is shorter than 100 * 20 seconds
@@ -361,8 +365,26 @@ if __name__ == "__main__":
         )
     )
 
+    # Start MLflow parent run for the sweep
+    mlflow_parent_run_id = None
+    mlflow_parent_run = None
+    if args.mlflow:
+        from sae_research.training.mlflow_logging import start_sweep_run
+        mlflow_parent_run = start_sweep_run(
+            experiment_name=demo_config.mlflow_experiment,
+            model_name=args.model_name,
+            layers=args.layers,
+            architectures=args.architectures,
+            run_cfg={
+                "num_tokens": demo_config.num_tokens,
+                "save_dir": save_dir,
+            },
+        )
+        mlflow_parent_run_id = mlflow_parent_run.info.run_id
+
+    all_mlflow_run_ids = []
     for layer in args.layers:
-        run_sae_training(
+        mlflow_run_ids = run_sae_training(
             model_name=args.model_name,
             layer=layer,
             save_dir=save_dir,
@@ -373,10 +395,12 @@ if __name__ == "__main__":
             dictionary_widths=demo_config.dictionary_widths,
             learning_rates=demo_config.learning_rates,
             dry_run=args.dry_run,
-            use_wandb=args.use_wandb,
+            use_mlflow=args.mlflow,
+            mlflow_parent_run_id=mlflow_parent_run_id,
             save_checkpoints=args.save_checkpoints,
             mixed_dataset=args.mixed_dataset,
         )
+        all_mlflow_run_ids.extend(mlflow_run_ids)
 
     ae_paths = utils.get_nested_folders(save_dir)
 
@@ -386,7 +410,13 @@ if __name__ == "__main__":
         demo_config.eval_num_inputs,
         args.device,
         overwrite_prev_results=True,
+        mlflow_run_ids=all_mlflow_run_ids,
     )
+
+    # End the parent sweep run
+    if mlflow_parent_run is not None:
+        import mlflow
+        mlflow.end_run()
 
     print(f"Total time: {time.time() - start_time}")
 
