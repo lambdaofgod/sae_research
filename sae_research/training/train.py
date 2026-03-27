@@ -177,8 +177,16 @@ def trainSAE(
         ]
         for trainer, dir in zip(trainers, save_dirs):
             os.makedirs(dir, exist_ok=True)
-            # save config
-            config = {"trainer": trainer.config}
+            tc = trainer.config
+            config = {
+                "format_version": 1,
+                "model_name": tc.get("lm_name", ""),
+                "hook_layer": tc.get("layer", ""),
+                "dict_class": tc.get("dict_class", type(trainer.ae).__name__),
+                "activation_dim": tc.get("activation_dim", 0),
+                "dict_size": tc.get("dict_size", 0),
+                "trainer": tc,
+            }
             try:
                 config["buffer"] = data.config
             except:
@@ -262,8 +270,14 @@ def trainSAE(
         if normalize_activations:
             trainer.ae.scale_biases(norm_factor)
         if save_dir is not None:
-            final = {k: v.cpu() for k, v in trainer.ae.state_dict().items()}
-            t.save(final, os.path.join(save_dir, "ae.pt"))
+            checkpoint = {
+                "step": steps,
+                "ae": {k: v.cpu() for k, v in trainer.ae.state_dict().items()},
+                "config": trainer.config,
+            }
+            if normalize_activations:
+                checkpoint["norm_factor"] = norm_factor
+            t.save(checkpoint, os.path.join(save_dir, "ae.pt"))
 
     # Signal wandb processes to finish
     if use_wandb:

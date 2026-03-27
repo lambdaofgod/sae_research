@@ -34,6 +34,8 @@ dependencies = [
     "einops>=0.7.0",
     "jaxtyping>=0.2.0",
     "zstandard>=0.22.0",
+    "boto3>=1.42.77",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]

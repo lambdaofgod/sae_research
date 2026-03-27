@@ -359,19 +359,34 @@ Katib integration.
 API: =LLM_CONFIG=, =SPARSITY_PENALTIES=, =TARGET_L0s=, =get_trainer_configs()=,
 all globals. =runner.py= unchanged. Both tests pass.
 
-* TODO [#B] Design SAE artifact contract between training and eval :code:contract:
+* DONE Design SAE artifact contract between training and eval   :code:contract:
 :PROPERTIES:
 :EFFORT:   small
 :END:
 
-Training and evaluation are separate pipeline stages. Training produces SAE
-artifacts (=ae.pt= + =config.json=), eval consumes them. Currently
-=sae_bench/scripts/setup_saes.py= loads SAEs from HuggingFace or hardcoded
-paths — need a standard artifact format/location so eval can pick up any
-trained SAE automatically regardless of where it came from.
+Standardized the artifact format between training and evaluation.
 
-This contract also determines how MLflow logs artifacts (what path structure,
-what metadata) and how KFP passes SAE references between train and eval steps.
+*** Artifact layout
+Each trained SAE lives in ={save_dir}/{submodule_name}/trainer_{i}/= with:
+- =ae.pt= — always ={"step": N, "ae": state_dict, "config": trainer_config}=
+  (optionally =norm_factor=, =optimizer= for backups). Final save now matches
+  backup format. =from_pretrained()= handles both raw and wrapped formats for
+  backward compat with old checkpoints.
+- =config.json= — standardized schema:
+  - =format_version=: 1 (for future migrations)
+  - =model_name=, =hook_layer=, =dict_class=, =activation_dim=, =dict_size=:
+    top-level fields for quick inspection without parsing nested trainer config
+  - =trainer=: full trainer config (backward compatible, used by =load_dictionary()=)
+  - =buffer=: optional activation buffer config
+
+*** Changes made
+- =train.py=: final =ae.pt= save now wraps state_dict with metadata (step,
+  config, norm_factor) matching backup format
+- =train.py=: =config.json= now includes =format_version= and top-level
+  =model_name=, =hook_layer=, =dict_class=, =activation_dim=, =dict_size=
+- =utils.py=: replaced =load_dictionary()= if/elif chain (12 branches) with
+  =_DICT_REGISTRY= dict mapping class name to (class, required_params).
+  Supports both new top-level =dict_class= and legacy =trainer.dict_class=.
 
 * TODO [#B] Fix training code pain points                   :code:training:
 :PROPERTIES:

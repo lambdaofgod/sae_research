@@ -287,6 +287,22 @@ def get_nested_folders(path: str) -> list[str]:
     return folder_names
 
 
+# Registry mapping dict_class name -> (class, list of extra kwargs to pull from trainer config)
+_DICT_REGISTRY: dict[str, tuple[type, list[str]]] = {
+    "AutoEncoder": (AutoEncoder, []),
+    "GatedAutoEncoder": (GatedAutoEncoder, []),
+    "AutoEncoderNew": (AutoEncoderNew, []),
+    "AutoEncoderTopK": (AutoEncoderTopK, ["k"]),
+    "BatchTopKSAE": (BatchTopKSAE, ["k"]),
+    "MatryoshkaBatchTopKSAE": (MatryoshkaBatchTopKSAE, ["k"]),
+    "JumpReluAutoEncoder": (JumpReluAutoEncoder, []),
+    "ThresholdingAutoEncoderTopK": (ThresholdingAutoEncoderTopK, ["k"]),
+    "NestedThresholdingAutoEncoderTopK": (NestedThresholdingAutoEncoderTopK, ["k_values"]),
+    "MatchingPursuitAutoEncoder": (MatchingPursuitAutoEncoder, ["s"]),
+    "NestedMatchingPursuitAutoEncoder": (NestedMatchingPursuitAutoEncoder, ["s_values"]),
+}
+
+
 def load_dictionary(base_path: str, device: str) -> tuple:
     ae_path = f"{base_path}/ae.pt"
     config_path = f"{base_path}/config.json"
@@ -294,40 +310,18 @@ def load_dictionary(base_path: str, device: str) -> tuple:
     with open(config_path, "r") as f:
         config = json.load(f)
 
-    dict_class = config["trainer"]["dict_class"]
+    # Support both new top-level dict_class and legacy trainer.dict_class
+    dict_class = config.get("dict_class") or config["trainer"]["dict_class"]
 
-    if dict_class == "AutoEncoder":
-        dictionary = AutoEncoder.from_pretrained(ae_path, device=device)
-    elif dict_class == "GatedAutoEncoder":
-        dictionary = GatedAutoEncoder.from_pretrained(ae_path, device=device)
-    elif dict_class == "AutoEncoderNew":
-        dictionary = AutoEncoderNew.from_pretrained(ae_path, device=device)
-    elif dict_class == "AutoEncoderTopK":
-        k = config["trainer"]["k"]
-        dictionary = AutoEncoderTopK.from_pretrained(ae_path, k=k, device=device)
-    elif dict_class == "BatchTopKSAE":
-        k = config["trainer"]["k"]
-        dictionary = BatchTopKSAE.from_pretrained(ae_path, k=k, device=device)
-    elif dict_class == "MatryoshkaBatchTopKSAE":
-        k = config["trainer"]["k"]
-        dictionary = MatryoshkaBatchTopKSAE.from_pretrained(ae_path, k=k, device=device)
-    elif dict_class == "JumpReluAutoEncoder":
-        dictionary = JumpReluAutoEncoder.from_pretrained(ae_path, device=device)
-    elif dict_class == "ThresholdingAutoEncoderTopK":
-        k = config["trainer"]["k"]
-        dictionary = ThresholdingAutoEncoderTopK.from_pretrained(ae_path, k=k, device=device)
-    elif dict_class == "NestedThresholdingAutoEncoderTopK":
-        k_values = config["trainer"]["k_values"]
-        dictionary = NestedThresholdingAutoEncoderTopK.from_pretrained(ae_path, k_values=k_values, device=device)
-    elif dict_class == "MatchingPursuitAutoEncoder":
-        s = config["trainer"]["s"]
-        dictionary = MatchingPursuitAutoEncoder.from_pretrained(ae_path, s=s, device=device)
-    elif dict_class == "NestedMatchingPursuitAutoEncoder":
-        s_values = config["trainer"]["s_values"]
-        dictionary = NestedMatchingPursuitAutoEncoder.from_pretrained(ae_path, s_values=s_values, device=device)
-    else:
+    if dict_class not in _DICT_REGISTRY:
         raise ValueError(f"Dictionary class {dict_class} not supported")
 
+    cls, extra_keys = _DICT_REGISTRY[dict_class]
+    kwargs = {"device": device}
+    for key in extra_keys:
+        kwargs[key] = config["trainer"][key]
+
+    dictionary = cls.from_pretrained(ae_path, **kwargs)
     return dictionary, config
 
 
