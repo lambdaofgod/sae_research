@@ -561,32 +561,42 @@ wrapping (=trainSAE= saves ={\"ae\": state_dict}=, =from_pretrained=
 expects raw state_dict). Training smoke test updated to use pythia-70m
 dimensions so SAE is evaluable by sae_bench.
 
-** TODO Package sae_bench as container image
-Build Docker image with =sae-bench==0.4.2=, =sae-lens=, =dictionary-learning=,
-and custom SAE classes (=thresholding_sae=, =matching_pursuit_sae=,
-=dictionary_learning_adapters=). Separate from training image.
+** DONE Package sae_bench as container image
+Dockerfile at =infra/activault/pipelines/eval/Dockerfile=. Build from repo root:
+=docker build -f infra/activault/pipelines/eval/Dockerfile -t sae-eval:latest .=
 
-** TODO Build eval KFP pipeline with reconciler
-Implement the reconciler pipeline:
-- KFP component that queries MLflow for (SAE, eval_type) gap matrix
-- KFP component that runs a single eval type on a single SAE, logs to MLflow
-- Pipeline orchestrates: gap discovery → sequential eval execution
-- Pipeline parameters: =--run-ids=, =--eval-types=, =--force=
+Base image: =flashattn2.7.4-pytorch2.7.0-cuda12.8-cudnn9-runtime= (same as activault).
+Installs =sae-bench==0.4.2=, =sae-lens=, =transformer-lens=, =dictionary-learning=
+(git dep), =mlflow=, then =sae_research= package with =--no-deps=.
+Separate from training image (no =geoopt=, =trackio=, etc.).
 
-Key scripts to adapt from DVC pipeline (=experiments/sae_bench/scripts/=):
-- =setup_saes.py= (419 lines) — SAE loading from 3 sources
-- =run_core_eval.py= (118 lines) — core evaluation
-- =run_optional_evals.py= (239 lines) — optional evals
-- =extract_metrics.py= (323 lines) — metric extraction
+** DONE Build eval KFP pipeline with reconciler
+Standalone reconciler in =sae_research/eval/reconciler.py= — no KFP dependency,
+usable from notebooks, scripts, or inside a KFP component.
 
-Aggregation (=aggregate_metrics.py=) is NOT part of the pipeline — it becomes
-ad-hoc notebook work querying MLflow.
+Pipeline at =infra/activault/pipelines/eval/eval_pipeline.py=:
+- Single =reconcile_and_eval= KFP component (one GPU, sequential execution)
+- Discovers gaps via =discover_gaps()= (queries MLflow for missing metric prefixes)
+- Runs each eval via =run_eval_for_gap()= (downloads SAE from MLflow, evaluates, logs back)
+- Pipeline parameters: =--experiment-name= (required), =--run-ids=, =--eval-types=, =--force=
+- Config: =infra/activault/pipelines/eval/config.yaml=
 
-** TODO Wire MLflow into evaluation pipeline
-Log eval metrics to the MLflow child run that produced the SAE being evaluated.
-=experiments/sae_bench/= currently writes to =metrics/*.json= — replace with
-MLflow logging so eval results are queryable via =mlflow.search_runs()=.
-Link eval runs to training runs via run ID tag.
+Reconciler functions:
+- =discover_gaps(tracking_uri, experiment_name, eval_types, run_ids, force)= → list of gap dicts
+- =run_eval_for_gap(tracking_uri, gap, experiment_name, device, dtype)= → metrics dict
+- =reconcile(...)= → full loop: discover gaps → eval each → log to MLflow
+
+MLflow wiring is built into the reconciler: =run_eval_for_gap()= downloads SAE
+artifacts from MLflow, runs eval, and calls =log_eval_to_mlflow()= to write metrics
+back to the SAE's child run. =experiment_name= tag required on all logged evals.
+
+Smoke test (=smoke_tests/smoke_test_eval_reconciler.py=, CPU, ~10s):
+1. Trains tiny SAE, verifies =discover_gaps()= finds =core= eval missing
+2. Runs =reconcile()= to fill it
+3. Verifies no gaps remain (=discover_gaps()= returns empty)
+4. Verifies =force=True= re-discovers the gap
+5. Verifies metrics and tags in MLflow
+Run: =uv run python smoke_tests/smoke_test_eval_reconciler.py --backend=local=
 
 ** TODO Comparison/aggregation notebooks
 Notebook(s) for ad-hoc cross-model comparison, replacing =aggregate_metrics.py=.

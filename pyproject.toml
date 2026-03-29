@@ -36,6 +36,8 @@ dependencies = [
     "boto3>=1.42.77",
     "pyyaml>=6.0.3",
     "mlflow>=3.10.1",
+    "kfp>=2.16.0",
+    "kfp-kubernetes>=2.16.0",
 ]
 
 [dependency-groups]

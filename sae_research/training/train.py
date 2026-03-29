@@ -130,10 +130,12 @@ def trainSAE(
     autocast_context = nullcontext() if device_type == "cpu" else t.autocast(device_type=device_type, dtype=autocast_dtype)
 
     trainers = []
+    trainer_classes = []
     for i, config in enumerate(trainer_configs):
         trainer_class = config["trainer"]
         del config["trainer"]
         trainers.append(trainer_class(**config))
+        trainer_classes.append(trainer_class)
 
     # Start MLflow child runs per trainer
     mlflow_run_ids = []
@@ -142,7 +144,7 @@ def trainSAE(
             run = start_trainer_run(
                 parent_run_id=mlflow_parent_run_id,
                 trainer_index=i,
-                trainer_config=trainer.config | run_cfg,
+                trainer_config={"trainer": trainer_classes[i], **trainer.config, **run_cfg},
             )
             mlflow_run_ids.append(run.info.run_id)
 
