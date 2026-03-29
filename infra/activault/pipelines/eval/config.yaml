@@ -1,0 +1,32 @@
+# Eval reconciler pipeline configuration.
+#
+# Usage:
+#   python eval_pipeline.py --submit --config config.yaml
+#
+# Or override individual values:
+#   python eval_pipeline.py --submit --config config.yaml \
+#     --override experiment_name=my_sweep \
+#     --override force=true
+
+# REQUIRED: experiment name tag for run isolation.
+# All eval results are tagged with this so they don't cross-contaminate.
+experiment_name: ""
+
+# MLflow tracking URI (in-cluster default)
+tracking_uri: "http://activault-mlflow.default.svc:5000"
+
+# Comma-separated eval types. Available: core
+# Future: sparse_probing, absorption, scr, tpp
+eval_types: "core"
+
+# Comma-separated MLflow run IDs to evaluate.
+# Empty = reconcile all SAE runs in the experiment (discover gaps automatically).
+run_ids: ""
+
+# Force rerun even if metrics already exist.
+# Use with --override eval_types=... to selectively rerun after eval code changes.
+force: false
+
+# Eval settings
+device: "cuda"
+dtype: "float32"

@@ -33,6 +33,7 @@ spec:
               mlflow server \
                 --host=0.0.0.0 \
                 --port=5000 \
+                --disable-security-middleware \
                 --backend-store-uri="postgresql://mlflow:${POSTGRES_PASSWORD}@{{ $fullname }}-postgres:5432/mlflow" \
                 --default-artifact-root="s3://{{ .Values.mlflow.artifactBucket }}/"
           ports:

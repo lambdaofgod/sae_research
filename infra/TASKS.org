@@ -598,6 +598,16 @@ Smoke test (=smoke_tests/smoke_test_eval_reconciler.py=, CPU, ~10s):
 5. Verifies metrics and tags in MLflow
 Run: =uv run python smoke_tests/smoke_test_eval_reconciler.py --backend=local=
 
+*** DONE Build and test eval container image + KFP submission
+Image built with =minikube image build=. Pipeline submitted and completed
+successfully on the cluster (run =d2a103bc=, state SUCCEEDED). Found 0 gaps
+because the local smoke test had already filled them — confirms MLflow
+connectivity, S3 artifact access, and reconciler logic all work in-cluster.
+
+Required =--disable-security-middleware= on MLflow server (see [[file:MLFLOW.org][MLFLOW.org]])
+and FQDN =activault-mlflow.default.svc:5000= as tracking URI for cross-namespace
+access from =kubeflow=.
+
 ** TODO Comparison/aggregation notebooks
 Notebook(s) for ad-hoc cross-model comparison, replacing =aggregate_metrics.py=.
 Query MLflow via =mlflow.search_runs()= with filters (architecture, layer,

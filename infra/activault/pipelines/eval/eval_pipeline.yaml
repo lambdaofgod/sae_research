@@ -1,0 +1,221 @@
+# PIPELINE DEFINITION
+# Name: sae-eval-reconcile
+# Description: SAE evaluation reconciler pipeline.
+#              Discovers missing evaluations and runs them sequentially.
+# Inputs:
+#    device: str [Default: 'cuda']
+#    dtype: str [Default: 'float32']
+#    eval_types: str [Default: 'core']
+#    experiment_name: str [Default: '']
+#    force: bool [Default: False]
+#    run_ids: str [Default: '']
+#    tracking_uri: str [Default: 'http://activault-mlflow.default.svc:5000']
+components:
+  comp-reconcile-and-eval:
+    executorLabel: exec-reconcile-and-eval
+    inputDefinitions:
+      parameters:
+        device:
+          parameterType: STRING
+        dtype:
+          parameterType: STRING
+        eval_types:
+          parameterType: STRING
+        experiment_name:
+          parameterType: STRING
+        force:
+          parameterType: BOOLEAN
+        run_ids:
+          parameterType: STRING
+        tracking_uri:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-reconcile-and-eval:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - reconcile_and_eval
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef reconcile_and_eval(\n    tracking_uri: str,\n    experiment_name:\
+          \ str,\n    eval_types: str,\n    run_ids: str,\n    force: bool,\n    device:\
+          \ str,\n    dtype: str,\n) -> str:\n    \"\"\"Discover eval gaps and run\
+          \ evaluations sequentially.\n\n    All imports are inside the function body\
+          \ because KFP serializes this\n    function and executes it inside the container\
+          \ image.\n    \"\"\"\n    import json\n\n    from sae_research.eval.reconciler\
+          \ import reconcile\n\n    if not experiment_name:\n        raise ValueError(\n\
+          \            \"experiment_name is required. \"\n            \"Example: 'topk_vs_batchtopk_march2024'\"\
+          \n        )\n\n    eval_type_list = [t.strip() for t in eval_types.split(\"\
+          ,\") if t.strip()]\n    run_id_list = [r.strip() for r in run_ids.split(\"\
+          ,\") if r.strip()] or None\n\n    results = reconcile(\n        tracking_uri=tracking_uri,\n\
+          \        experiment_name=experiment_name,\n        eval_types=eval_type_list\
+          \ if eval_type_list else None,\n        run_ids=run_id_list,\n        force=force,\n\
+          \        device=device,\n        dtype=dtype,\n    )\n\n    return json.dumps(results,\
+          \ default=str)\n\n"
+        image: sae-eval:latest
+        resources:
+          accelerator:
+            count: '1'
+            resourceCount: '1'
+            resourceType: nvidia.com/gpu
+            type: nvidia.com/gpu
+          memoryLimit: 34.359738368
+          memoryRequest: 17.179869184
+          resourceMemoryLimit: 32Gi
+          resourceMemoryRequest: 16Gi
+pipelineInfo:
+  description: 'SAE evaluation reconciler pipeline.
+
+    Discovers missing evaluations and runs them sequentially.'
+  name: sae-eval-reconcile
+root:
+  dag:
+    tasks:
+      reconcile-and-eval:
+        cachingOptions: {}
+        componentRef:
+          name: comp-reconcile-and-eval
+        inputs:
+          parameters:
+            device:
+              componentInputParameter: device
+            dtype:
+              componentInputParameter: dtype
+            eval_types:
+              componentInputParameter: eval_types
+            experiment_name:
+              componentInputParameter: experiment_name
+            force:
+              componentInputParameter: force
+            run_ids:
+              componentInputParameter: run_ids
+            tracking_uri:
+              componentInputParameter: tracking_uri
+        retryPolicy:
+          backoffDuration: 0s
+          backoffFactor: 2.0
+          backoffMaxDuration: 3600s
+        taskInfo:
+          name: reconcile-and-eval
+  inputDefinitions:
+    parameters:
+      device:
+        defaultValue: cuda
+        description: Eval device (cuda, cpu).
+        isOptional: true
+        parameterType: STRING
+      dtype:
+        defaultValue: float32
+        description: Eval dtype (float32, bfloat16).
+        isOptional: true
+        parameterType: STRING
+      eval_types:
+        defaultValue: core
+        description: Comma-separated eval types (e.g. "core" or "core,sparse_probing").
+        isOptional: true
+        parameterType: STRING
+      experiment_name:
+        defaultValue: ''
+        description: REQUIRED. Tag for eval campaign isolation.
+        isOptional: true
+        parameterType: STRING
+      force:
+        defaultValue: false
+        description: Rerun even if metrics already exist.
+        isOptional: true
+        parameterType: BOOLEAN
+      run_ids:
+        defaultValue: ''
+        description: Comma-separated MLflow run IDs. Empty = reconcile all SAE runs.
+        isOptional: true
+        parameterType: STRING
+      tracking_uri:
+        defaultValue: http://activault-mlflow.default.svc:5000
+        description: MLflow tracking server URI (in-cluster).
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.0
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-reconcile-and-eval:
+          activeDeadlineSeconds: '259200'
+          emptyDirMounts:
+          - medium: Memory
+            mountPath: /dev/shm
+            sizeLimit: 16Gi
+            volumeName: dshm
+          imagePullPolicy: Never
+          podMetadata:
+            annotations:
+              cluster-autoscaler.kubernetes.io/safe-to-evict: 'false'
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: AWS_ACCESS_KEY_ID
+              secretKey: AWS_ACCESS_KEY_ID
+            - envVar: AWS_SECRET_ACCESS_KEY
+              secretKey: AWS_SECRET_ACCESS_KEY
+            - envVar: AWS_ENDPOINT_URL
+              secretKey: AWS_ENDPOINT_URL
+            - envVar: AWS_DEFAULT_REGION
+              secretKey: AWS_DEFAULT_REGION
+            optional: false
+            secretName: activault-s3-creds
+            secretNameParameter:
+              runtimeValue:
+                constant: activault-s3-creds
+          - keyToEnv:
+            - envVar: S3_ENDPOINT_URL
+              secretKey: AWS_ENDPOINT_URL
+            optional: false
+            secretName: activault-s3-creds
+            secretNameParameter:
+              runtimeValue:
+                constant: activault-s3-creds
+          - keyToEnv:
+            - envVar: MLFLOW_S3_ENDPOINT_URL
+              secretKey: AWS_ENDPOINT_URL
+            optional: false
+            secretName: activault-s3-creds
+            secretNameParameter:
+              runtimeValue:
+                constant: activault-s3-creds
+          - keyToEnv:
+            - envVar: HF_TOKEN
+              secretKey: token
+            optional: false
+            secretName: hf-token-secret
+            secretNameParameter:
+              runtimeValue:
+                constant: hf-token-secret
+          tolerations:
+          - effect: NoSchedule
+            key: nvidia.com/gpu
+            operator: Exists

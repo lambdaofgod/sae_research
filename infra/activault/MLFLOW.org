@@ -1,0 +1,65 @@
+#+title: MLflow Tracking
+#+OPTIONS: toc:2
+
+* Overview
+
+MLflow is the experiment tracking server for SAE training and evaluation. It
+replaces WandB/trackio. Deployed as part of the activault Helm chart with
+PostgreSQL as the backend store and Garage S3 for artifact storage.
+
+Components:
+- *PostgreSQL StatefulSet* (=templates/statefulset-postgres.yaml=) -- 10Gi PVC, single replica
+- *MLflow Deployment* (=templates/deployment-mlflow.yaml=) -- tracking server on port 5000
+- *MLflow Secret* (=templates/secret-mlflow.yaml=) -- auto-generated PostgreSQL credentials
+- *Garage bootstrap job* (=templates/job-garage-bootstrap.yaml=) -- creates =mlflow-artifacts= bucket
+
+* Architecture
+
+Training runs create a parent/child MLflow run hierarchy:
+- *Parent run* (sweep-level): tagged with model, layers, architectures
+- *Child runs* (per-trainer): params, step metrics (L0, loss, variance), artifacts (=ae.pt=, =config.json=)
+
+The eval reconciler (=sae_research/eval/reconciler.py=) discovers child runs
+missing evaluations and fills them, logging eval metrics back to the same child run.
+
+* Gotchas
+
+** DNS rebinding protection (MLflow 3.x)
+
+MLflow 3.x rejects requests whose =Host= header doesn't match an allow-list.
+In K8s, services are addressed by multiple DNS names depending on the caller's
+namespace (=activault-mlflow=, =activault-mlflow.default.svc=, with or without
+=:5000=). The eval KFP pipeline runs in the =kubeflow= namespace so it uses the
+FQDN, which MLflow rejects by default.
+
+We use =--disable-security-middleware= in the MLflow server command to bypass
+this entirely. This is acceptable because the cluster has no public ingress --
+MLflow is only reachable via port-forwards. If this changes, switch to
+=--allowed-hosts= with explicit hostnames instead.
+
+** S3 endpoint for artifacts
+
+Both the MLflow server and any client that downloads artifacts need
+=MLFLOW_S3_ENDPOINT_URL= pointing at Garage. The server gets this from
+=activault-s3-creds= secret. Clients outside the cluster (e.g. smoke tests)
+need a port-forward to Garage on =:3900= and the env var set accordingly.
+See =smoke_tests/with-k8s-env.sh= for the wrapper that sets this up.
+
+** Secrets in kubeflow namespace
+
+KFP pods run in the =kubeflow= namespace but secrets are in =default=. After
+every =helm upgrade= that changes secrets, re-copy them:
+
+#+begin_src sh
+kubectl get secret activault-s3-creds -o yaml | sed 's/namespace: default/namespace: kubeflow/' | kubectl apply -n kubeflow -f -
+#+end_src
+
+* Access
+
+MLflow UI is proxied on =:8085= via the activault nginx proxy:
+
+#+begin_src sh
+kubectl port-forward --address 0.0.0.0 svc/activault-proxy 8085:8085
+#+end_src
+
+Or use =smoke_tests/with-k8s-env.sh= which sets up port-forwards automatically.
