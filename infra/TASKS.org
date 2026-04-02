@@ -480,6 +480,55 @@ on CPU, asserts parent/child runs, metrics, and artifacts are logged.
 Defaults to K8s MLflow (=--backend=kubernetes=), =--backend=local= for a
 temporary file-backed server.
 
+* DONE Migrate temporal SAEs into training framework     :code:migration:
+:PROPERTIES:
+:EFFORT:   medium
+:END:
+
+Temporal SAEs (from =forks/temporal-saes/=) train on pairs of consecutive
+tokens =[batch, 2, d_model]= instead of flat shuffled tokens. The loss adds a
+temporal consistency term encouraging smooth feature changes between adjacent
+positions. Two variants: Matryoshka (group-based reconstruction) and plain
+BatchTopK.
+
+** DONE Copy temporal SAE model + trainer classes
+=sae_research/temporal_sae.py= — contains both variants:
+- =TemporalMatryoshkaBatchTopKSAE= / =TemporalMatryoshkaBatchTopKTrainer=
+- =TemporalBatchTopKSAE= / =TemporalBatchTopKTrainer=
+Fixed double-slice bug in =TemporalBatchTopKSAE.encode()= from the fork.
+
+** DONE Create temporal S3 activation buffer
+=sae_research/training/temporal_buffer.py= — =TemporalS3Buffer= subclasses
+=ActivaultS3ActivationBuffer=, pairs =states[:, 1:]= with =states[:, :-1]=.
+Requires =S3RCache(return_ids=True, shuffle=False)= to preserve sequence order.
+
+** DONE Register temporal architectures in config system
+Added =TEMPORAL_MATRYOSHKA_BATCH_TOP_K= and =TEMPORAL_BATCH_TOP_K= to
+=TrainerType=, config dataclasses, and sweep generation in =get_trainer_configs()=.
+Sweep params =temporal_temp_alphas= and =temporal_contrastive= in =architectures.yaml=.
+
+** DONE Wire temporal buffer into runner
+=runner.py= detects temporal architectures, creates =TemporalS3Buffer= with
+=S3RCache(return_ids=True, shuffle=False)=, passes =normalize_activations=False=.
+=train.py= / =log_stats()= work unchanged (temporal trainer returns compatible shapes).
+
+** DONE Register in dictionary loader
+=utils.py= =_FROM_CONFIG_REGISTRY= for =load_dictionary()= support via =from_config()=.
+
+** Usage
+#+begin_src sh
+uv run python -m sae_research.training.runner \
+  --save_dir temporal_run \
+  --model_name google/gemma-2-2b-it \
+  --layers 13 \
+  --architectures temporal_matryoshka_batch_top_k \
+  --device cuda:0
+#+end_src
+
+** Deferred: LLM forward pass path
+=TemporalActivationBuffer= (for live LLM forward passes, mode "r") uses nnsight.
+Our runner uses transformers =AutoModelForCausalLM=. Activault path only for now.
+
 * TODO [#B] KFP evaluation pipeline — sae_bench on K8s     :infra:eval:
 :PROPERTIES:
 :EFFORT:   large
@@ -614,27 +663,41 @@ Query MLflow via =mlflow.search_runs()= with filters (architecture, layer,
 eval type), produce tables and plots. This is deliberately not a pipeline —
 choosing which SAEs to compare is a research decision, not an automated step.
 
-* TODO [#B] Training Operator v2                            :infra:training:
+* TODO [#A] Training Operator v2 :infra:training:
 :PROPERTIES:
 :EFFORT:   medium
 :END:
 
-Unified =TrainJob= API. Platform-side =ClusterTrainingRuntime= defines GPU
-defaults, failure handling. User-side =TrainJob= manifests are lightweight.
-Kueue and KFP pipelines build on top of this.
+Kubeflow Trainer v2 (repo: =kubeflow/trainer=, latest v2.2.0). Provides =TrainJob=
+CRD for submitting training workloads. =ClusterTrainingRuntime= defines GPU defaults,
+base image, failure handling. Users submit lightweight =TrainJob= manifests.
 
-** TODO Deploy Training Operator v2
-Install from Kubeflow 1.11+. Define =ClusterTrainingRuntime= for SAE training
-workloads (single-GPU — training code is not DDP).
+See [[file:KUBEFLOW_TRAINING.org][KUBEFLOW_TRAINING.org]] for installation instructions, CRD reference, and examples.
 
-** TODO Evaluate distributed training needs
+** DONE Install prerequisites
+JobSet CRD is required — Training Operator v2 builds on JobSet.
+Bundled with the Helm chart — installed automatically.
+
+** DONE Deploy Training Operator v2
+Helm install from OCI registry (no =helm repo add= needed):
+#+begin_example
+helm install kubeflow-trainer oci://ghcr.io/kubeflow/charts/kubeflow-trainer \
+    --namespace kubeflow-system --create-namespace --version 2.2.0
+#+end_example
+Verify: =kubectl get crds | grep trainer.kubeflow.org=
+
+** DONE Define ClusterTrainingRuntime for SAE training
+Single-GPU runtime with: training image, GPU request/toleration, =/dev/shm= mount,
+S3 + MLflow secrets. Training code is not DDP — =mlPolicy.numNodes: 1=.
+
+** TODO [#C] Evaluate distributed training needs
 Training in =training.py= =trainSAE()= is single-GPU: one process,
 one device, sequential over all trainer configs. The Stiefel variant needs
 ~3GB per gradient step for dict_size=16384 — might benefit from model
 parallelism on larger dict sizes. Evaluate whether DDP or model parallelism
 is worth it for the architectures being researched.
 
-* TODO [#C] GPU job scheduling — submit and queue training runs :infra:scheduling:
+* TODO GPU job scheduling — submit and queue training runs :infra:scheduling:
 :PROPERTIES:
 :EFFORT:   large
 :END:
@@ -656,13 +719,13 @@ configurations = [
 Want: submit training configs and have them queue up on available GPUs
 automatically, instead of manually deciding what runs where and when.
 
-** TODO Package training code as a container image
+** DONE Package training code as a container image
 Build a Docker image with training code and all deps (torch, flash-attn,
 geoopt, etc.). Similar to how =activault-flashattn= image was built for the
 collection pipeline. Depends on migration being done first so the Docker
 build context is in =sae_research/=.
 
-** TODO Create KFP training pipeline
+** TODO [#A] Create KFP training pipeline
 KFP pipeline wrapping the training entry point — expose config params
 (model, layers, architectures, num_tokens, etc.) so they're visible in the
 KFP UI per run. Follow the same pattern as the activault collection pipeline:
@@ -676,7 +739,7 @@ KFP UI per run. Follow the same pattern as the activault collection pipeline:
 Inject =MLFLOW_TRACKING_URI= + =MLFLOW_S3_ENDPOINT_URL= via K8s secrets.
 Pass =run_id= downstream as KFP artifact to link pipeline steps.
 
-** TODO Install Kueue for GPU admission control
+** TODO [#C] Install Kueue for GPU admission control
 So submitted TrainJobs queue behind each other instead of fighting for GPUs.
 
 - ResourceFlavor per GPU type (mapped to node labels)
@@ -685,7 +748,7 @@ So submitted TrainJobs queue behind each other instead of fighting for GPUs.
 - Annotate KFP jobs with =kueue.x-k8s.io/queue-name=
 - StrictFIFO scheduling to start (simple, predictable)
 
-** TODO Katib for hyperparameter sweeps
+** TODO [#B] Katib for hyperparameter sweeps
 Without Katib, sweeps are =itertools.product()= in =config.py=
 =get_trainer_configs()= — generates all combos of seed × dict_width × lr ×
 sparsity_penalty and trains them sequentially (or manually split across GPUs

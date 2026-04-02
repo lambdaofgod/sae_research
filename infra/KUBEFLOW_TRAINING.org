@@ -1,0 +1,267 @@
+#+title: Kubeflow Training Operator v2
+#+author: auto-generated reference
+#+date: 2026-04-02
+
+* Overview
+
+Kubeflow Training Operator v2 (repo: =kubeflow/trainer=, formerly =kubeflow/training-operator=)
+provides a =TrainJob= CRD for submitting training workloads to Kubernetes.
+
+Platform admins define =ClusterTrainingRuntime= resources (GPU defaults, base images,
+failure handling). Users submit lightweight =TrainJob= manifests that reference a runtime.
+
+Our use case: submit single-GPU SAE training jobs (=runner.py=) to the cluster
+with proper GPU scheduling, secret injection, and shared memory for PyTorch.
+
+* Prerequisites
+
+- Kubernetes >= 1.28 (we run 1.35.1)
+- *JobSet CRD* must be installed — Training Operator v2 builds on top of JobSet.
+  Check: =kubectl get crds | grep jobset=
+
+* Installation
+
+** Helm (recommended)
+
+Chart is served from an OCI registry — no =helm repo add= needed.
+
+#+begin_src bash
+VERSION=2.2.0
+
+# Controller only
+helm install kubeflow-trainer oci://ghcr.io/kubeflow/charts/kubeflow-trainer \
+    --namespace kubeflow-system \
+    --create-namespace \
+    --version ${VERSION}
+
+# With built-in runtimes (torch-distributed, deepspeed, etc.)
+helm install kubeflow-trainer oci://ghcr.io/kubeflow/charts/kubeflow-trainer \
+    --namespace kubeflow-system \
+    --create-namespace \
+    --version ${VERSION} \
+    --set runtimes.defaultEnabled=true
+
+# With specific runtimes only
+helm install kubeflow-trainer oci://ghcr.io/kubeflow/charts/kubeflow-trainer \
+    --namespace kubeflow-system \
+    --create-namespace \
+    --version ${VERSION} \
+    --set runtimes.torchDistributed.enabled=true
+#+end_src
+
+** kubectl alternative
+
+#+begin_src bash
+export VERSION=v2.2.0
+
+# Controller
+kubectl apply --server-side -k \
+  "https://github.com/kubeflow/trainer.git/manifests/overlays/manager?ref=${VERSION}"
+
+# Built-in runtimes
+kubectl apply --server-side -k \
+  "https://github.com/kubeflow/trainer.git/manifests/overlays/runtimes?ref=${VERSION}"
+#+end_src
+
+** Verify
+
+#+begin_src bash
+kubectl get crds | grep trainer.kubeflow.org
+# Expected:
+#   clustertrainingruntimes.trainer.kubeflow.org
+#   trainingruntimes.trainer.kubeflow.org
+#   trainjobs.trainer.kubeflow.org
+#+end_src
+
+* CRDs
+
+| CRD                    | Scope     | Purpose                                        |
+|------------------------+-----------+------------------------------------------------|
+| ClusterTrainingRuntime | cluster   | Admin-defined template: image, GPU, mlPolicy   |
+| TrainingRuntime        | namespace | Same as above but scoped to a namespace        |
+| TrainJob               | namespace | User-submitted job referencing a runtime        |
+
+* ClusterTrainingRuntime
+
+Defines the pod template that TrainJobs will use. Admins set the base image,
+resource defaults, and ML framework configuration here.
+
+** Built-in =torch-distributed= runtime
+
+This is what ships with the operator when =runtimes.torchDistributed.enabled=true=:
+
+#+begin_src yaml
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: ClusterTrainingRuntime
+metadata:
+  name: torch-distributed
+  labels:
+    trainer.kubeflow.org/framework: torch
+spec:
+  mlPolicy:
+    numNodes: 1
+    torch: {}
+  template:
+    spec:
+      replicatedJobs:
+        - name: node
+          template:
+            metadata:
+              labels:
+                trainer.kubeflow.org/trainjob-ancestor-step: trainer
+            spec:
+              template:
+                spec:
+                  containers:
+                    - name: node
+                      image: pytorch/pytorch:2.10.0-cuda12.8-cudnn9-runtime
+#+end_src
+
+** Custom runtime example
+
+A runtime for single-GPU training with shared memory (needed by PyTorch DataLoader):
+
+#+begin_src yaml
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: ClusterTrainingRuntime
+metadata:
+  name: sae-single-gpu
+  labels:
+    trainer.kubeflow.org/framework: torch
+spec:
+  mlPolicy:
+    numNodes: 1
+  template:
+    spec:
+      replicatedJobs:
+        - name: node
+          template:
+            metadata:
+              labels:
+                trainer.kubeflow.org/trainjob-ancestor-step: trainer
+            spec:
+              template:
+                spec:
+                  tolerations:
+                    - key: nvidia.com/gpu
+                      operator: Exists
+                      effect: NoSchedule
+                  containers:
+                    - name: node
+                      image: my-training-image:latest
+                      resources:
+                        requests:
+                          memory: "16Gi"
+                        limits:
+                          nvidia.com/gpu: "1"
+                          memory: "32Gi"
+                      volumeMounts:
+                        - name: dshm
+                          mountPath: /dev/shm
+                  volumes:
+                    - name: dshm
+                      emptyDir:
+                        medium: Memory
+                        sizeLimit: "16Gi"
+#+end_src
+
+* TrainJob
+
+Lightweight manifest submitted by users. References a runtime and optionally patches it.
+
+** Minimal
+
+#+begin_src yaml
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: my-training-run
+spec:
+  runtimeRef:
+    apiGroup: trainer.kubeflow.org
+    kind: ClusterTrainingRuntime
+    name: sae-single-gpu
+#+end_src
+
+** With runtimePatches
+
+=runtimePatches= can add volumes, tolerations, nodeSelector, serviceAccount.
+They *cannot* override image, resources, command, args, or env vars for the
+=node= container — use the Trainer API for those.
+
+#+begin_src yaml
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: my-training-run
+spec:
+  runtimeRef:
+    apiGroup: trainer.kubeflow.org
+    kind: ClusterTrainingRuntime
+    name: sae-single-gpu
+  runtimePatches:
+    - manager: trainer.kubeflow.org/kubeflow-sdk
+      trainingRuntimeSpec:
+        template:
+          spec:
+            replicatedJobs:
+              - name: node
+                template:
+                  spec:
+                    template:
+                      spec:
+                        volumes:
+                          - name: training-data
+                            persistentVolumeClaim:
+                              claimName: my-data-pvc
+                        containers:
+                          - name: trainer
+                            volumeMounts:
+                              - name: training-data
+                                mountPath: /workspace/data
+                        nodeSelector:
+                          accelerator: nvidia-tesla-v100
+                        tolerations:
+                          - key: nvidia.com/gpu
+                            operator: Exists
+                            effect: NoSchedule
+#+end_src
+
+* MLPolicy
+
+Controls distributed training configuration. Set in the runtime's =spec.mlPolicy=.
+
+| Field          | Description                                              |
+|----------------+----------------------------------------------------------|
+| numNodes       | Number of training nodes (1 for single-GPU)              |
+| torch          | Torch-specific config (numProcPerNode, etc.)             |
+| mpi            | MPI-specific config (numProcPerNode, implementation)     |
+| (empty)        | PlainML — standard K8s Jobs with parallelism = numNodes  |
+
+** Torch policy
+
+#+begin_src yaml
+mlPolicy:
+  numNodes: 3
+  torch:
+    numProcPerNode: gpu   # "auto", "gpu", or integer
+#+end_src
+
+Uses =torchrun= CLI under the hood. =numProcPerNode: gpu= means one process per GPU.
+
+For single-GPU non-DDP training, just use:
+
+#+begin_src yaml
+mlPolicy:
+  numNodes: 1
+#+end_src
+
+* Reference
+
+- Upstream docs: https://www.kubeflow.org/docs/components/trainer/
+- GitHub: https://github.com/kubeflow/trainer
+- Runtime guide: https://www.kubeflow.org/docs/components/trainer/operator-guides/runtime/
+- Job template: https://www.kubeflow.org/docs/components/trainer/operator-guides/job-template/
+- RuntimePatches: https://www.kubeflow.org/docs/components/trainer/operator-guides/runtime-patches/
+- MLPolicy: https://www.kubeflow.org/docs/components/trainer/operator-guides/ml-policy/
+- JobSet (dependency): https://jobset.sigs.k8s.io/

@@ -140,6 +140,7 @@ def trainSAE(
     # Start MLflow child runs per trainer
     mlflow_run_ids = []
     if use_mlflow:
+        import mlflow
         for i, trainer in enumerate(trainers):
             run = start_trainer_run(
                 parent_run_id=mlflow_parent_run_id,
@@ -147,6 +148,8 @@ def trainSAE(
                 trainer_config={"trainer": trainer_classes[i], **trainer.config, **run_cfg},
             )
             mlflow_run_ids.append(run.info.run_id)
+            # End the child run so the parent stays active for the next child
+            mlflow.end_run()
 
     # make save dirs, export config
     if save_dir is not None:
@@ -232,16 +235,15 @@ def trainSAE(
                         continue
                     # save the current state of the trainer for resume if training is interrupted
                     # this will be overwritten by the next checkpoint and at the end of training
-                    t.save(
-                        {
+                    backup = {
                         "step": step,
                         "ae": trainer.ae.state_dict(),
                         "optimizer": trainer.optimizer.state_dict(),
                         "config": trainer.config,
-                        "norm_factor": norm_factor,
-                        },
-                        os.path.join(save_dir, "ae.pt"),
-                    )
+                    }
+                    if normalize_activations:
+                        backup["norm_factor"] = norm_factor
+                    t.save(backup, os.path.join(save_dir, "ae.pt"))
 
             # training
             for trainer in trainers:

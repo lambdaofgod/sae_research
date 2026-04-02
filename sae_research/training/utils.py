@@ -23,6 +23,7 @@ from dictionary_learning.dictionary import (
 # Import the custom SAE classes
 from sae_research.thresholding_sae import ThresholdingAutoEncoderTopK, NestedThresholdingAutoEncoderTopK
 from sae_research.matching_pursuit_sae import MatchingPursuitAutoEncoder, NestedMatchingPursuitAutoEncoder
+from sae_research.temporal_sae import TemporalMatryoshkaBatchTopKSAE, TemporalBatchTopKSAE
 
 
 def create_activault_buffer(activault_config, sae_batch_size: int, device: str):
@@ -302,6 +303,12 @@ _DICT_REGISTRY: dict[str, tuple[type, list[str]]] = {
     "NestedMatchingPursuitAutoEncoder": (NestedMatchingPursuitAutoEncoder, ["s_values"]),
 }
 
+# Temporal SAEs use from_config(ae_path, trainer_cfg, device) instead of constructor + load_state_dict
+_FROM_CONFIG_REGISTRY: dict[str, type] = {
+    "TemporalMatryoshkaBatchTopKSAE": TemporalMatryoshkaBatchTopKSAE,
+    "TemporalBatchTopKSAE": TemporalBatchTopKSAE,
+}
+
 
 def _unwrap_checkpoint(path: str) -> dict:
     """Load ae.pt, handling both raw state_dicts and training checkpoints.
@@ -324,6 +331,12 @@ def load_dictionary(base_path: str, device: str) -> tuple:
 
     # Support both new top-level dict_class and legacy trainer.dict_class
     dict_class = config.get("dict_class") or config["trainer"]["dict_class"]
+
+    # Temporal SAEs use from_config classmethod (different constructor signatures)
+    if dict_class in _FROM_CONFIG_REGISTRY:
+        cls = _FROM_CONFIG_REGISTRY[dict_class]
+        dictionary = cls.from_config(ae_path, config["trainer"], device)
+        return dictionary, config
 
     if dict_class not in _DICT_REGISTRY:
         raise ValueError(f"Dictionary class {dict_class} not supported")

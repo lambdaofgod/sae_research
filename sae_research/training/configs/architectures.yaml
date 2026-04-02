@@ -12,6 +12,9 @@ sparsity_penalties:
 
 target_l0s: [20, 40, 80, 160, 320]
 
+temporal_temp_alphas: [0.1]
+temporal_contrastive: [false]
+
 training_params:
   warmup_steps: 100
   sparsity_warmup_steps: 500

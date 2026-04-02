@@ -25,6 +25,7 @@ from dictionary_learning.pytorch_buffer import ActivationBuffer
 from dictionary_learning.evaluation import evaluate
 from sae_research.training.train import trainSAE
 from sae_research.training import utils
+from sae_research.training.temporal_buffer import TemporalS3Buffer
 
 
 def get_args():
@@ -115,11 +116,43 @@ def run_sae_training(
     else:
         save_steps = None
 
+    _TEMPORAL_ARCHITECTURES = {
+        demo_config.TrainerType.TEMPORAL_MATRYOSHKA_BATCH_TOP_K.value,
+        demo_config.TrainerType.TEMPORAL_BATCH_TOP_K.value,
+    }
+    is_temporal = bool(set(architectures) & _TEMPORAL_ARCHITECTURES)
+
     llm_config = demo_config.LLM_CONFIG[model_name]
     submodule_name = f"resid_post_layer_{layer}"
     io = "out"
 
-    if llm_config.activault is not None:
+    if is_temporal and llm_config.activault is not None:
+        # Temporal Activault path: preserve sequence order for adjacent-token pairing
+        from dictionary_learning.activault_s3_buffer import S3RCache, create_s3_client
+        import os
+        s3_client = create_s3_client(
+            endpoint_url=os.environ.get("AWS_ENDPOINT_URL") or os.environ.get("S3_ENDPOINT_URL"),
+        )
+        cache = S3RCache(
+            s3_client=s3_client,
+            s3_prefix=llm_config.activault.s3_prefix,
+            bucket_name=llm_config.activault.s3_bucket,
+            buffer_size=llm_config.activault.s3_buffer_size,
+            n_workers=llm_config.activault.s3_workers,
+            device=device,
+            return_ids=True,
+            shuffle=False,
+        )
+        activation_buffer = TemporalS3Buffer(cache, batch_size=sae_batch_size, device=device)
+        activation_dim = cache.metadata["shape"][-1]
+        print(f"Using temporal activault: prefix={llm_config.activault.s3_prefix}, "
+              f"activation_dim={activation_dim}, dtype={cache.metadata['dtype']}")
+    elif is_temporal and llm_config.activault is None:
+        raise NotImplementedError(
+            "Temporal SAE training from LLM forward passes is not yet supported. "
+            "Use Activault pre-computed activations instead."
+        )
+    elif llm_config.activault is not None:
         # Activault path: stream pre-computed activations from S3
         activation_buffer, metadata = utils.create_activault_buffer(
             llm_config.activault, sae_batch_size=sae_batch_size, device=device,
@@ -195,6 +228,8 @@ def run_sae_training(
 
     if not dry_run:
         # actually run the sweep
+        # Temporal SAEs don't support activation normalization (different data shape)
+        normalize = not is_temporal
         mlflow_run_ids = trainSAE(
             data=activation_buffer,
             trainer_configs=trainer_configs,
@@ -204,7 +239,7 @@ def run_sae_training(
             save_steps=save_steps,
             save_dir=save_dir,
             log_steps=log_steps,
-            normalize_activations=True,
+            normalize_activations=normalize,
             verbose=False,
             autocast_dtype=t.bfloat16,
             backup_steps=1000,

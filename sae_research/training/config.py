@@ -40,6 +40,12 @@ from sae_research.matching_pursuit_sae import (
     MatchingPursuitAutoEncoder,
     MatchingPursuitTrainer,
 )
+from sae_research.temporal_sae import (
+    TemporalMatryoshkaBatchTopKSAE,
+    TemporalMatryoshkaBatchTopKTrainer,
+    TemporalBatchTopKSAE,
+    TemporalBatchTopKTrainer,
+)
 from dictionary_learning.dictionary import (
     AutoEncoder,
     GatedAutoEncoder,
@@ -114,6 +120,8 @@ class TrainerType(Enum):
     NESTED_THRESHOLDING_TOP_K = "nested_thresholding_topk"
     STIEFEL_NESTED_THRESHOLDING_TOP_K = "stiefel_nested_thresholding_topk"
     MATCHING_PURSUIT = "matching_pursuit"
+    TEMPORAL_MATRYOSHKA_BATCH_TOP_K = "temporal_matryoshka_batch_top_k"
+    TEMPORAL_BATCH_TOP_K = "temporal_batch_top_k"
 
 
 @dataclass
@@ -158,6 +166,9 @@ WARMUP_STEPS = _training_params["warmup_steps"]
 SPARSITY_WARMUP_STEPS = _training_params["sparsity_warmup_steps"]
 DECAY_START_FRACTION = _training_params["decay_start_fraction"]
 K_ANNEAL_END_FRACTION = _training_params["k_anneal_end_fraction"]
+
+TEMPORAL_TEMP_ALPHAS = _arch_cfg.get("temporal_temp_alphas", [0.1])
+TEMPORAL_CONTRASTIVE = _arch_cfg.get("temporal_contrastive", [False])
 
 num_tokens = _defaults_cfg["num_tokens"]
 print(f"NOTE: Training on {num_tokens} tokens")
@@ -275,6 +286,34 @@ class MatryoshkaBatchTopKTrainerConfig(BaseTrainerConfig):
     threshold_beta: float = 0.999
     threshold_start_step: int = 1000
     k_anneal_steps: Optional[int] = None
+
+
+@dataclass
+class TemporalMatryoshkaBatchTopKTrainerConfig(BaseTrainerConfig):
+    dict_size: int
+    seed: int
+    lr: float
+    k: int
+    temporal: str  # "p" for adjacent pairing
+    contrastive: bool
+    temp_alpha: float = 0.1
+    group_fractions: list[float] = field(default_factory=lambda: [0.2, 0.8])
+    group_weights: Optional[list[float]] = field(default_factory=lambda: [0.2, 0.8])
+    auxk_alpha: float = 1 / 32
+    threshold_beta: float = 0.999
+    threshold_start_step: int = 1000
+
+
+@dataclass
+class TemporalBatchTopKTrainerConfig(BaseTrainerConfig):
+    dict_size: int
+    seed: int
+    lr: float
+    k: int
+    temporal: str  # "p" for adjacent pairing
+    auxk_alpha: float = 1 / 32
+    threshold_beta: float = 0.999
+    threshold_start_step: int = 1000
 
 
 @dataclass
@@ -530,6 +569,40 @@ def get_trainer_configs(
                 seed=seed,
                 k_values=k_values,
                 k_weights=k_weights,
+            )
+            trainer_configs.append(asdict(config))
+
+    if TrainerType.TEMPORAL_MATRYOSHKA_BATCH_TOP_K.value in architectures:
+        for seed, dict_size, learning_rate, k, temp_alpha, contrastive in itertools.product(
+            seeds, dict_sizes, learning_rates, TARGET_L0s, TEMPORAL_TEMP_ALPHAS, TEMPORAL_CONTRASTIVE,
+        ):
+            config = TemporalMatryoshkaBatchTopKTrainerConfig(
+                **base_config,
+                trainer=TemporalMatryoshkaBatchTopKTrainer,
+                dict_class=TemporalMatryoshkaBatchTopKSAE,
+                lr=learning_rate,
+                dict_size=dict_size,
+                seed=seed,
+                k=k,
+                temporal="p",
+                contrastive=contrastive,
+                temp_alpha=temp_alpha,
+            )
+            trainer_configs.append(asdict(config))
+
+    if TrainerType.TEMPORAL_BATCH_TOP_K.value in architectures:
+        for seed, dict_size, learning_rate, k in itertools.product(
+            seeds, dict_sizes, learning_rates, TARGET_L0s,
+        ):
+            config = TemporalBatchTopKTrainerConfig(
+                **base_config,
+                trainer=TemporalBatchTopKTrainer,
+                dict_class=TemporalBatchTopKSAE,
+                lr=learning_rate,
+                dict_size=dict_size,
+                seed=seed,
+                k=k,
+                temporal="p",
             )
             trainer_configs.append(asdict(config))
 
