@@ -7,7 +7,7 @@ import torch.multiprocessing as mp
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
 
-    from sae_research.training.runner import run_sae_training
+    from sae_research.training.cli_runner import run_sae_training
     from sae_research.training import config as demo_config
 
     model_name = "google/gemma-2-2b-it"

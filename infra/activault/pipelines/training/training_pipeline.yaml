@@ -1,0 +1,194 @@
+# PIPELINE DEFINITION
+# Name: sae-training
+# Inputs:
+#    architectures: str [Default: 'batch_top_k']
+#    device: str [Default: 'cuda:0']
+#    layers: str [Default: '13']
+#    mlflow: bool [Default: True]
+#    model_name: str [Default: 'google/gemma-2-2b-it']
+#    save_checkpoints: bool [Default: False]
+#    save_dir: str [Default: 'sae_run']
+components:
+  comp-sae-train:
+    executorLabel: exec-sae-train
+    inputDefinitions:
+      parameters:
+        architectures:
+          parameterType: STRING
+        device:
+          parameterType: STRING
+        layers:
+          parameterType: STRING
+        mlflow:
+          parameterType: BOOLEAN
+        model_name:
+          parameterType: STRING
+        save_checkpoints:
+          parameterType: BOOLEAN
+        save_dir:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-sae-train:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - sae_train
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef sae_train(\n    save_dir: str,\n    model_name: str,\n    layers:\
+          \ str,\n    architectures: str,\n    device: str,\n    save_checkpoints:\
+          \ bool,\n    mlflow: bool,\n):\n    \"\"\"Run SAE training via runner.py.\"\
+          \"\"\n    import os\n    import subprocess\n\n    os.environ['MLFLOW_TRACKING_URI']\
+          \ = 'http://activault-mlflow.default.svc:5000'\n    os.environ['MLFLOW_S3_ENDPOINT_URL']\
+          \ = 'http://activault-garage.default:3900'\n\n    cmd = [\n        'python',\
+          \ '-m', 'sae_research.training.runner',\n        '--save_dir', save_dir,\n\
+          \        '--model_name', model_name,\n        '--layers', *layers.split(','),\n\
+          \        '--architectures', *architectures.split(','),\n        '--device',\
+          \ device,\n    ]\n    if save_checkpoints:\n        cmd.append('--save_checkpoints')\n\
+          \    if not mlflow:\n        cmd.append('--no-mlflow')\n\n    subprocess.run(cmd,\
+          \ check=True)\n\n"
+        image: sae-training:latest
+        resources:
+          accelerator:
+            count: '1'
+            resourceCount: '1'
+            resourceType: nvidia.com/gpu
+            type: nvidia.com/gpu
+          memoryLimit: 34.359738368
+          memoryRequest: 17.179869184
+          resourceMemoryLimit: 32Gi
+          resourceMemoryRequest: 16Gi
+pipelineInfo:
+  name: sae-training
+root:
+  dag:
+    tasks:
+      sae-train:
+        cachingOptions: {}
+        componentRef:
+          name: comp-sae-train
+        inputs:
+          parameters:
+            architectures:
+              componentInputParameter: architectures
+            device:
+              componentInputParameter: device
+            layers:
+              componentInputParameter: layers
+            mlflow:
+              componentInputParameter: mlflow
+            model_name:
+              componentInputParameter: model_name
+            save_checkpoints:
+              componentInputParameter: save_checkpoints
+            save_dir:
+              componentInputParameter: save_dir
+        retryPolicy:
+          backoffDuration: 0s
+          backoffFactor: 2.0
+          backoffMaxDuration: 3600s
+        taskInfo:
+          name: sae-train
+  inputDefinitions:
+    parameters:
+      architectures:
+        defaultValue: batch_top_k
+        isOptional: true
+        parameterType: STRING
+      device:
+        defaultValue: cuda:0
+        isOptional: true
+        parameterType: STRING
+      layers:
+        defaultValue: '13'
+        isOptional: true
+        parameterType: STRING
+      mlflow:
+        defaultValue: true
+        isOptional: true
+        parameterType: BOOLEAN
+      model_name:
+        defaultValue: google/gemma-2-2b-it
+        isOptional: true
+        parameterType: STRING
+      save_checkpoints:
+        defaultValue: false
+        isOptional: true
+        parameterType: BOOLEAN
+      save_dir:
+        defaultValue: sae_run
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.0
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-sae-train:
+          activeDeadlineSeconds: '259200'
+          emptyDirMounts:
+          - medium: Memory
+            mountPath: /dev/shm
+            sizeLimit: 16Gi
+            volumeName: dshm
+          imagePullPolicy: Never
+          podMetadata:
+            annotations:
+              cluster-autoscaler.kubernetes.io/safe-to-evict: 'false'
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: AWS_ACCESS_KEY_ID
+              secretKey: AWS_ACCESS_KEY_ID
+            - envVar: AWS_SECRET_ACCESS_KEY
+              secretKey: AWS_SECRET_ACCESS_KEY
+            - envVar: AWS_ENDPOINT_URL
+              secretKey: AWS_ENDPOINT_URL
+            - envVar: AWS_DEFAULT_REGION
+              secretKey: AWS_DEFAULT_REGION
+            optional: false
+            secretName: activault-s3-creds
+            secretNameParameter:
+              runtimeValue:
+                constant: activault-s3-creds
+          - keyToEnv:
+            - envVar: S3_ENDPOINT_URL
+              secretKey: AWS_ENDPOINT_URL
+            optional: false
+            secretName: activault-s3-creds
+            secretNameParameter:
+              runtimeValue:
+                constant: activault-s3-creds
+          - keyToEnv:
+            - envVar: HF_TOKEN
+              secretKey: token
+            optional: false
+            secretName: hf-token-secret
+            secretNameParameter:
+              runtimeValue:
+                constant: hf-token-secret
+          tolerations:
+          - effect: NoSchedule
+            key: nvidia.com/gpu
+            operator: Exists

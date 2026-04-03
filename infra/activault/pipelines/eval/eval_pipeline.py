@@ -19,12 +19,8 @@ Usage:
         --override force=true
 """
 
-from pathlib import Path
-
 from kfp import compiler, dsl
 from kfp import kubernetes
-
-PIPELINE_DIR = Path(__file__).parent
 
 
 @dsl.component(base_image="sae-eval:latest", packages_to_install=[])
@@ -178,7 +174,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SAE eval reconciler pipeline")
     parser.add_argument("--compile-only", action="store_true")
     parser.add_argument("--submit", action="store_true")
-    parser.add_argument("--config", default=str(PIPELINE_DIR / "config.yaml"))
+    parser.add_argument("--output", required=True, help="path for compiled pipeline YAML")
+    parser.add_argument("--config", help="eval config YAML (required for --submit)")
     parser.add_argument("--host", default="http://localhost:8087")
     parser.add_argument(
         "--override",
@@ -188,11 +185,12 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    output_path = str(PIPELINE_DIR / "eval_pipeline.yaml")
-    compiler.Compiler().compile(eval_pipeline, output_path)
-    print(f"Compiled pipeline to {output_path}")
+    compiler.Compiler().compile(eval_pipeline, args.output)
+    print(f"Compiled pipeline to {args.output}")
 
     if args.submit:
+        if not args.config:
+            parser.error("--config is required when using --submit")
         with open(args.config) as f:
             cfg = yaml.safe_load(f)
 
