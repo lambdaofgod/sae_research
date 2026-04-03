@@ -65,7 +65,10 @@ class DictionaryLearningSAEWrapper(base_sae.BaseSAE):
         self.W_enc = nn.Parameter(autoencoder.encoder.weight.T.detach())
         self.W_dec = nn.Parameter(autoencoder.decoder.weight.T.detach())
 
-        if hasattr(autoencoder.encoder, "bias") and autoencoder.encoder.bias is not None:
+        if (
+            hasattr(autoencoder.encoder, "bias")
+            and autoencoder.encoder.bias is not None
+        ):
             self.b_enc = nn.Parameter(autoencoder.encoder.bias.detach())
 
         if hasattr(autoencoder, "b_dec"):

@@ -1,0 +1,224 @@
+#+title: Activault KFP Pipeline — Implementation Notes
+
+* Overview
+
+The activault collection pipeline runs on Kubeflow Pipelines (KFP) v2.15.0 standalone
+(kustomize install, no full Kubeflow). Each collection run is a single GPU step that
+loads a model, runs inference on a dataset, and uploads activation shards to Garage (S3).
+
+Pipeline source: =pipelines/activault/collect_pipeline.py=
+
+* Architecture
+
+#+begin_example
+pipelines/activault/
+  collect_pipeline.py       # KFP pipeline definition + submit CLI
+  config.yaml               # default run config (model, hooks, batches, etc.)
+  Dockerfile                # collector image (slow, builds flash-attn from source)
+  Dockerfile.flashattn      # collector image (fast, recommended)
+  pyproject.toml            # activault Python deps (used by Dockerfiles)
+  datasets.json             # dataset registry (used by Dockerfiles)
+  deploy.sh                 # legacy deploy script
+  check_kfp_logs.sh         # tail logs of latest KFP run
+  monitor_upload.py         # estimate upload speed and ETA to completion
+#+end_example
+
+The Helm chart (=activault/=) manages infra only: Garage, S3 credentials, bootstrap.
+Pipeline config is fully decoupled — passed as KFP pipeline parameters, not via
+Helm-managed ConfigMaps.
+
+* Component type: use =@dsl.component=, not =@dsl.container_component=
+
+We tried =@dsl.container_component= first. It does not work well for our use case.
+
+** =@dsl.container_component= problems
+
+- Parameters are injected via =dsl.ConcatPlaceholder= which concatenates strings
+  into =command= or =args= fields of the container spec.
+- If your =command= is a wrapper (e.g. =python3 -c "..."= or =sh -c "..."=), the
+  placeholders are NOT resolved — they arrive as literal JSON strings like
+  ={ "Concat": ["run_name=", "gemma2_2b"] }= instead of =run_name=gemma2_2b=.
+- Building config YAML via heredoc + ConcatPlaceholder produces invalid YAML in the
+  compiled pipeline spec (newlines in ConcatPlaceholder break the KFP YAML compiler).
+- Escaping hell: embedding Python in =sh -c= in a KFP container spec requires triple
+  escaping of quotes, which is unmaintainable.
+
+** =@dsl.component= works
+
+Use =@dsl.component(base_image='activault-flashattn:latest', packages_to_install=[])=:
+
+- Parameters arrive as proper Python arguments — no string concatenation needed.
+- The component function can build a config dict, write it to YAML, and shell out to
+  =activault collect= via =subprocess.run=.
+- =packages_to_install=[]= prevents KFP from running =pip install= at startup
+  (the base image already has everything).
+- Imports must be inside the function body (KFP serializes the function source).
+
+* Pipeline parameters
+
+All config values are exposed as pipeline parameters so they are visible in the KFP
+UI for every run. A local =config.yaml= provides defaults; the =--submit= CLI reads
+it and flattens values into KFP arguments.
+
+Parameters:
+- =run_name= — identifies the run in S3 (e.g. =gemma2_2b=)
+- =model_name= — HuggingFace model ID (e.g. =google/gemma-2-2b-it=)
+- =dtype= — model precision (e.g. =bfloat16=)
+- =n_batches=, =seq_length=, =batch_size=, =seed=, =start_batch= — data config
+- =batches_per_upload= — how many batches to accumulate before uploading a shard
+- =hooks= — comma-separated hook names (e.g. =models.layers.13.self_attn.post,models.layers.13.mlp.post=)
+- =bucket_name= — S3 bucket (e.g. =activations=)
+- =dataset= — HuggingFace dataset ID
+
+Hooks are passed as a comma-separated string (not JSON, not YAML list) because KFP
+parameters are scalar. The component splits on =,= at runtime.
+
+* Critical: =/dev/shm= mount
+
+KFP does NOT mount =/dev/shm= by default. The container default is 64MB. PyTorch
+DataLoader with =num_workers > 0= uses shared memory for inter-process tensor
+transfer. With only 64MB, the DataLoader silently deadlocks — no error, no timeout,
+no log output. GPU utilization drops to 0%.
+
+Fix:
+
+#+begin_src python
+kubernetes.empty_dir_mount(
+    task, volume_name='dshm', mount_path='/dev/shm',
+    medium='Memory', size_limit='16Gi',
+)
+#+end_src
+
+This was the hardest bug to diagnose. See =archive/KUBEFLOW_ACTIVAULT_PIPELINE_BUG.org=
+for the full investigation.
+
+Symptom: pipeline completes model loading and hook setup, then goes silent. GPU idle.
+Same container image works fine as a plain =kubectl run= pod (which had =/dev/shm=
+mounted). The fix is one line but the symptom gives no clue.
+
+* Cross-namespace resources
+
+KFP runs workflows in the =kubeflow= namespace. The Helm chart deploys secrets in
+=default=. Secrets must be copied to =kubeflow=:
+
+#+begin_src sh
+kubectl get secret activault-s3-creds -o yaml | sed 's/namespace: default/namespace: kubeflow/' | kubectl apply -n kubeflow -f -
+kubectl get secret hf-token-secret -o yaml | sed 's/namespace: default/namespace: kubeflow/' | kubectl apply -n kubeflow -f -
+#+end_src
+
+Must be re-run after every =helm upgrade= that changes secrets. The S3 endpoint in
+the secret must use FQDN (=activault-garage.default:3900=) so DNS resolves from
+=kubeflow= namespace.
+
+The activault config ConfigMap is no longer needed — config is passed as pipeline
+parameters.
+
+* Image pull policy
+
+Local images (built into minikube's Docker daemon) need =imagePullPolicy: Never=.
+KFP defaults to =Always= or =IfNotPresent=, which tries to pull from a registry.
+
+#+begin_src python
+kubernetes.set_image_pull_policy(task, 'Never')
+#+end_src
+
+Without this you get =ErrImagePull= because =activault-flashattn:latest= doesn't
+exist in any registry.
+
+* S3 endpoint env var name
+
+The Helm secret provides =AWS_ENDPOINT_URL=. Activault reads =S3_ENDPOINT_URL=.
+The pipeline maps the same secret key to both env var names:
+
+#+begin_src python
+kubernetes.use_secret_as_env(task, secret_name='activault-s3-creds',
+    secret_key_to_env={'AWS_ENDPOINT_URL': 'AWS_ENDPOINT_URL', ...})
+kubernetes.use_secret_as_env(task, secret_name='activault-s3-creds',
+    secret_key_to_env={'AWS_ENDPOINT_URL': 'S3_ENDPOINT_URL'})
+#+end_src
+
+Two =use_secret_as_env= calls because a Python dict can't have duplicate keys.
+
+* KFP scratch volume mounts
+
+KFP/Argo mounts emptyDirs at =/.cache=, =/.local=, =/.config=. This can shadow
+cached content in the container image (HuggingFace cache, CUDA kernel cache, etc.).
+In practice this hasn't caused issues beyond =/dev/shm=, but be aware if you see
+unexpected recompilation of CUDA kernels or re-downloads of cached assets.
+
+* Caching must be disabled
+
+KFP caches task results by default. A re-run with the same parameters silently skips
+the step and writes nothing to S3. This is catastrophic for data collection pipelines.
+
+#+begin_src python
+task.set_caching_options(False)
+#+end_src
+
+Also pass =enable_caching=False= when submitting via the client.
+
+* Deleting runs
+
+Deleting a KFP run via the Python client does NOT always clean up the underlying
+Argo workflow. Always delete from both sides:
+
+#+begin_src sh
+# Kill the actual workload
+minikube kubectl -- delete workflows -n kubeflow --all
+
+# Clean up KFP's database
+# (via Python client: client.delete_run(run_id))
+#+end_src
+
+If you only delete the KFP run, the Argo workflow (and its GPU pod) keeps running.
+If you only delete the Argo workflow, the KFP UI shows the run as stuck in RUNNING.
+
+* CLI usage
+
+Compile only (no submit):
+
+#+begin_src sh
+cd pipelines/activault
+uv run python collect_pipeline.py --compile-only
+#+end_src
+
+Compile and submit with config.yaml defaults:
+
+#+begin_src sh
+uv run python collect_pipeline.py --submit
+#+end_src
+
+Submit with a different config file:
+
+#+begin_src sh
+uv run python collect_pipeline.py --submit --config /path/to/other-config.yaml
+#+end_src
+
+Custom KFP host:
+
+#+begin_src sh
+uv run python collect_pipeline.py --submit --host http://localhost:9090
+#+end_src
+
+* Monitoring
+
+Check logs of the latest run:
+
+#+begin_src sh
+./check_kfp_logs.sh activault-collect 30    # last 30 lines
+./check_kfp_logs.sh activault-collect       # full logs
+#+end_src
+
+Estimate upload speed and ETA:
+
+#+begin_src sh
+python3 monitor_upload.py --watch 60 --total-gb 1012.5
+#+end_src
+
+* Environment
+
+- KFP standalone v2.15.0 (kustomize)
+- Argo Workflows v3.7.3
+- Image: =activault-flashattn:latest= (flash-attn 2.7.4, PyTorch 2.7.0, CUDA 12.8)
+- KFP SDK: =kfp= + =kfp-kubernetes= (installed via =uv= in =pipelines/activault/.venv=)
+- Minikube with single GPU node

@@ -107,6 +107,7 @@ def _load_defaults() -> dict:
 # Enums & dataclasses (unchanged public API)
 # ---------------------------------------------------------------------------
 
+
 class TrainerType(Enum):
     STANDARD = "standard"
     STANDARD_NEW = "standard_new"
@@ -184,6 +185,7 @@ mlflow_experiment = _defaults_cfg["mlflow_experiment"]
 # ---------------------------------------------------------------------------
 # Trainer config dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class BaseTrainerConfig:
@@ -339,6 +341,7 @@ class JumpReluTrainerConfig(BaseTrainerConfig):
 # ---------------------------------------------------------------------------
 # Sweep generation
 # ---------------------------------------------------------------------------
+
 
 def get_trainer_configs(
     architectures: list[str],
@@ -573,8 +576,20 @@ def get_trainer_configs(
             trainer_configs.append(asdict(config))
 
     if TrainerType.TEMPORAL_MATRYOSHKA_BATCH_TOP_K.value in architectures:
-        for seed, dict_size, learning_rate, k, temp_alpha, contrastive in itertools.product(
-            seeds, dict_sizes, learning_rates, TARGET_L0s, TEMPORAL_TEMP_ALPHAS, TEMPORAL_CONTRASTIVE,
+        for (
+            seed,
+            dict_size,
+            learning_rate,
+            k,
+            temp_alpha,
+            contrastive,
+        ) in itertools.product(
+            seeds,
+            dict_sizes,
+            learning_rates,
+            TARGET_L0s,
+            TEMPORAL_TEMP_ALPHAS,
+            TEMPORAL_CONTRASTIVE,
         ):
             config = TemporalMatryoshkaBatchTopKTrainerConfig(
                 **base_config,
@@ -592,7 +607,10 @@ def get_trainer_configs(
 
     if TrainerType.TEMPORAL_BATCH_TOP_K.value in architectures:
         for seed, dict_size, learning_rate, k in itertools.product(
-            seeds, dict_sizes, learning_rates, TARGET_L0s,
+            seeds,
+            dict_sizes,
+            learning_rates,
+            TARGET_L0s,
         ):
             config = TemporalBatchTopKTrainerConfig(
                 **base_config,

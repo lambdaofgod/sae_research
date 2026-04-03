@@ -1,0 +1,43 @@
+# kube-prometheus-stack Helm values for activault monitoring
+# Install with:
+#   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     -n monitoring -f monitoring/prometheus-values.yaml
+
+prometheus:
+  prometheusSpec:
+    # Discover ServiceMonitors in ALL namespaces, not just the release namespace.
+    # Without this, Garage's ServiceMonitor in the default namespace is invisible.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}
+    podMonitorSelector: {}
+    podMonitorNamespaceSelector: {}
+
+    retention: 15d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+
+grafana:
+  enabled: true
+  # adminPassword defaults to "prom-operator" if unset
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+    datasources:
+      enabled: true
+  persistence:
+    enabled: true
+    size: 10Gi
+
+alertmanager:
+  enabled: true

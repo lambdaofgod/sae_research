@@ -1,0 +1,165 @@
+#+title: Activault K8s
+#+OPTIONS: toc:2
+
+* Overview
+
+This document covers deploying [[https://github.com/tilde-research/activault][Activault]] — an activation data engine for SAE
+training — on a Kubernetes cluster, using Garage as a local S3-compatible store
+for the collected activations.
+
+The setup has two parts:
+
+- *Helm chart* (=activault/=): manages Garage and S3 credentials as versioned infra
+- *KFP pipeline* (=pipelines/activault/=): collection runs submitted via Kubeflow Pipelines
+
+For implementation details and gotchas, see:
+- [[file:ACTIVAULT_KFP.org][ACTIVAULT_KFP.org]] — pipeline architecture, component design, all the gotchas
+- [[file:S3_VAULT.org][S3_VAULT.org]] — Garage storage details, bucket structure, S3 browser setup
+- =archive/= — resolved bugs; don't read by default, consult if something weird happens
+
+*Keep your GPU nodes and Garage in the same network/datacenter.* Activault
+collection runs produce ~TB of data.
+
+* Project structure
+
+#+begin_example
+activault/                             # Helm chart — infra only
+  .helmignore
+  Chart.yaml
+  values.yaml                          # Garage config + S3 creds
+  charts/garage/                       # vendored Garage subchart
+  templates/
+    _helpers.tpl
+    job-garage-bootstrap.yaml          # post-install hook: layout, key, bucket
+    secret-s3.yaml                     # S3 credentials secret
+pipelines/activault/                   # KFP pipeline — self-contained
+  collect_pipeline.py                  # pipeline definition + submit CLI
+  config.yaml                          # default run config (model, hooks, etc.)
+  Dockerfile                           # collector image (slow)
+  Dockerfile.flashattn                 # collector image (fast, recommended)
+  pyproject.toml                       # activault Python deps
+  datasets.json                        # dataset registry
+  check_kfp_logs.sh                    # tail logs of latest KFP run
+  monitor_upload.py                    # estimate upload speed and ETA
+scripts/                               # utility scripts
+archive/                               # resolved bugs and investigations
+#+end_example
+
+* Deployment
+
+** 1. Shell aliases
+
+#+begin_src sh :session *activault* :async
+alias kubectl="minikube kubectl --"
+#+end_src
+
+** 2. Build collector image
+
+#+begin_src sh :session *activault* :async
+eval $(minikube docker-env)
+docker build -t activault-flashattn:latest -f pipelines/activault/Dockerfile.flashattn pipelines/activault/
+#+end_src
+
+** 3. Vendor Garage chart (one-time)
+
+#+begin_src sh :session *activault* :async
+git clone --depth 1 https://git.deuxfleurs.fr/Deuxfleurs/garage.git /tmp/garage-chart \
+  && cp -r /tmp/garage-chart/script/helm/garage activault/charts/garage \
+  && rm -rf /tmp/garage-chart
+#+end_src
+
+** 4. Deploy infra
+
+#+begin_src sh :session *activault* :async
+helm upgrade --install activault ./activault
+#+end_src
+
+** 5. Create HuggingFace token secret
+
+#+begin_src sh :session *activault* :async
+kubectl create secret generic hf-token-secret --from-file=token=$HOME/.keys/hf_token.txt
+#+end_src
+
+** 6. Install KFP
+
+#+begin_src sh :session *activault* :async
+export PIPELINE_VERSION=2.15.0
+kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref=$PIPELINE_VERSION"
+kubectl wait --for condition=established --timeout=60s crd/applications.app.k8s.io
+kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic?ref=$PIPELINE_VERSION"
+#+end_src
+
+#+begin_src sh :session *activault* :async
+kubectl wait --for=condition=Ready pod --all -n kubeflow --timeout=300s
+#+end_src
+
+** 7. Copy secrets to kubeflow namespace
+
+#+begin_src sh :session *activault* :async
+kubectl get secret activault-s3-creds -o yaml | sed 's/namespace: default/namespace: kubeflow/' | kubectl apply -n kubeflow -f -
+kubectl get secret hf-token-secret -o yaml | sed 's/namespace: default/namespace: kubeflow/' | kubectl apply -n kubeflow -f -
+#+end_src
+
+Re-run after every =helm upgrade= that changes secrets.
+
+** 8. Access UIs
+
+See [[*Accessing UIs]] at the end of this document.
+
+** 9. Set up pipeline venv
+
+#+begin_src sh :session *activault* :async
+cd pipelines/activault && uv venv && uv pip install kfp kfp-kubernetes pyyaml
+#+end_src
+
+** 10. Edit config and submit a run
+
+Edit =pipelines/activault/config.yaml= with desired parameters, then:
+
+#+begin_src sh :session *activault* :async
+cd pipelines/activault && uv run python collect_pipeline.py --submit
+#+end_src
+
+To change config and re-run, just edit =config.yaml= and submit again — no Helm
+redeploy needed.
+
+** 11. Monitor
+
+Check logs:
+
+#+begin_src sh :session *activault* :async
+./pipelines/activault/check_kfp_logs.sh activault-collect 30
+#+end_src
+
+Estimate upload speed and ETA:
+
+#+begin_src sh :session *activault* :async
+python3 pipelines/activault/monitor_upload.py --watch 60 --total-gb 1012.5
+#+end_src
+
+** 12. Clean up runs
+
+Always delete from both Argo and KFP:
+
+#+begin_src sh :session *activault* :async
+kubectl delete workflows -n kubeflow --all
+#+end_src
+
+Then delete from KFP UI or via the Python client.
+
+* Accessing UIs
+
+The Helm chart deploys an nginx proxy pod that maps each UI to its own port.
+One =kubectl port-forward= exposes everything:
+
+#+begin_src sh :session *activault* :async
+kubectl port-forward --address 0.0.0.0 svc/activault-proxy 8081:8081 8082:8082 8083:8083 8084:8084 8086:8086
+#+end_src
+
+- =:8081= — Kubernetes dashboard
+- =:8082= — Kubeflow Pipelines UI
+- =:8083= — Garage admin API
+- =:8084= — Garage S3 API (use as =--endpoint-url= for aws/boto3)
+- =:8086= — Grafana (dashboards + Prometheus, creds =admin= / =prom-operator=)
+
+Ports are configured in =values.yaml= under =proxy.services=.

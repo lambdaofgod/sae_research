@@ -34,6 +34,7 @@ class SAEWrapper(SentenceTransformer):
         """Save only the SAE module + config with teacher model name."""
         import json
         import os
+
         os.makedirs(path, exist_ok=True)
         self.sae.save(path)
         with open(os.path.join(path, "extra_config.json"), "w") as f:
@@ -44,6 +45,7 @@ class SAEWrapper(SentenceTransformer):
         """Load SAEWrapper from saved path."""
         import json
         import os
+
         config_path = os.path.join(path, "extra_config.json")
         with open(config_path) as f:
             config = json.load(f)
@@ -90,7 +92,9 @@ class EmbeddingReconstructionLoss(nn.Module):
         for param in self.teacher.parameters():
             param.requires_grad = False
 
-    def forward(self, sentence_features: list[dict[str, Tensor]], labels=None) -> Tensor:
+    def forward(
+        self, sentence_features: list[dict[str, Tensor]], labels=None
+    ) -> Tensor:
         features = sentence_features[0]
 
         # 1. Get teacher embeddings (dense target)
@@ -110,7 +114,9 @@ class EmbeddingReconstructionLoss(nn.Module):
 class NormalizedEmbeddingReconstructionLoss(EmbeddingReconstructionLoss):
     """Uses normalized MSE: MSE(recon, target) / MSE(mean, target)"""
 
-    def forward(self, sentence_features: list[dict[str, Tensor]], labels=None) -> Tensor:
+    def forward(
+        self, sentence_features: list[dict[str, Tensor]], labels=None
+    ) -> Tensor:
         features = sentence_features[0]
 
         with torch.no_grad():
@@ -123,5 +129,7 @@ class NormalizedEmbeddingReconstructionLoss(EmbeddingReconstructionLoss):
 
         # Normalized MSE: divide by variance (MSE of predicting mean)
         mse = F.mse_loss(reconstruction, target)
-        baseline_mse = F.mse_loss(target.mean(dim=0, keepdim=True).expand_as(target), target)
+        baseline_mse = F.mse_loss(
+            target.mean(dim=0, keepdim=True).expand_as(target), target
+        )
         return mse / baseline_mse

@@ -657,6 +657,13 @@ Required =--disable-security-middleware= on MLflow server (see [[file:MLFLOW.org
 and FQDN =activault-mlflow.default.svc:5000= as tracking URI for cross-namespace
 access from =kubeflow=.
 
+** TODO Report executed MLflow experiments and runs
+After reconciliation, the eval pipeline should output a summary of what actually
+ran: experiment names and run IDs. Currently =reconcile()= returns results but
+they're serialized to JSON and lost. The pipeline should surface this as a
+structured output (printed summary + KFP output artifact) so the user knows
+which experiments/runs were touched without digging through MLflow UI.
+
 ** TODO Comparison/aggregation notebooks
 Notebook(s) for ad-hoc cross-model comparison, replacing =aggregate_metrics.py=.
 Query MLflow via =mlflow.search_runs()= with filters (architecture, layer,
@@ -778,6 +785,14 @@ Same pattern as the eval reconciler (=discover_gaps()= / =reconcile()=):
 This is what makes it safe to resubmit a KFP pipeline run without retraining
 everything from scratch.
 
+*** TODO Report executed MLflow experiments and runs
+After training completes (with or without reconciliation), the runner should
+output a summary of what actually ran: experiment name, parent run ID, and
+child run IDs for each trained SAE config. Currently =run_sae_training()=
+returns =mlflow_run_ids= but they're only passed to =eval_saes()= and then
+discarded. Print a structured summary at the end and, when running as a KFP
+component, surface it as a pipeline output artifact.
+
 ** TODO [#C] Install Kueue for GPU admission control
 So submitted TrainJobs queue behind each other instead of fighting for GPUs.
 
@@ -832,10 +847,53 @@ Collect pipeline can stay as subprocess since =activault= is a separate CLI tool
 Set up [[https://github.com/facebook/pyrefly][pyrefly]] as a type checker / linter for the repo. Currently there's
 no static analysis — syntax errors and broken imports are only caught at runtime.
 
-- Add pyrefly config (=pyrefly.toml= or =pyproject.toml= section)
-- Configure to check =sae_research/= and =infra/activault/pipelines/=
-- Add a =uv run pyrefly check= invocation to CI or a Makefile target
-- Fix any initial errors it flags
+- DONE Add pyrefly config (=pyrefly.toml=)
+- DONE Configure =project_includes= to check =sae_research/=
+- Fix initial errors (see subtask below)
+
+** TODO Fix 169 pyrefly errors in =sae_research/=
+
+Initial run (2026-04-03) found 169 errors. Breakdown by file:
+
+| File                              | Errors | Main issues                                        |
+|-----------------------------------+--------+----------------------------------------------------|
+| =temporal_sae.py=                 |     39 | bad overrides, param name mismatches, type mismatch |
+| =matching_pursuit_sae.py=         |     25 | unbound name (auxk_loss), bad overrides, returns   |
+| =thresholding_sae.py=             |     22 | override/type issues                               |
+| =instance_sae.py=                 |     22 | same pattern                                       |
+| =training/train.py=               |     14 | Tensor|float vs Tensor, str|None vs str            |
+| =training/cli_runner.py=          |     10 | None defaults on bool/float params, arg types      |
+| =modules.py=                      |      9 | Tensor not callable, topk arg types                |
+| =eval/sae_wrapper.py=             |      8 | Module not assignable to int (d_in)                |
+| =embedder_sae.py=                 |      5 | bad overrides of SentenceTransformer methods       |
+| =stiefel_sae.py=                  |      5 | type mismatches                                    |
+| =training/runner.py=              |      3 | literal assignment, optional arg types             |
+| =dictionary_learning_adapters.py= |      3 | Path vs str, / on str                              |
+| =sae_features.py=                 |      3 | —                                                  |
+
+Most errors are =bad-override= in SAE trainer subclasses (don't match =SAETrainer=
+parent interface) and =Optional= type issues (=None= defaults on non-optional params).
+
+** TODO Move KFP deps to a =pipelines= dependency group
+
+=kfp= and =kfp-kubernetes= are only used by =infra/activault/pipelines/=, not
+by =sae_research=. Move them from =[project.dependencies]= to a dependency group:
+
+#+begin_src toml
+[dependency-groups]
+pipelines = ["kfp>=2.16.0", "kfp-kubernetes>=2.16.0"]
+#+end_src
+
+Then check pipelines separately:
+- =uv run pyrefly check sae_research/= — base deps, no kfp
+- =uv run --group pipelines pyrefly check infra/activault/pipelines/= — kfp installed
+
+** DONE Set up pre-commit hook for pyrefly
+
+Use [[https://pre-commit.com/][pre-commit]] to run pyrefly automatically before each commit.
+- =uv add --dev pre-commit=
+- Add =.pre-commit-config.yaml= with a local hook running =uv run pyrefly check=
+- Consider a second hook for pipelines (=uv run --group pipelines pyrefly check=)
 
 * TODO [#C] Backlog                                               :backlog:
 :PROPERTIES:

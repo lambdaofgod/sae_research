@@ -1,0 +1,57 @@
+#+title: S3 Vault — Garage Storage
+
+* Overview
+
+Garage is deployed as an S3-compatible storage cluster via the Helm chart in =activault/=
+(see =activault_k8s.org= for deployment instructions).
+
+* Current Garage setup
+
+- Garage runs as a StatefulSet via the vendored Helm subchart in =activault/charts/garage/=
+- Deployed with =helm upgrade --install activault ./activault=
+- Service name: =activault-garage= in =default= namespace
+- S3 API port: 3900
+- Admin API port: 3903 (token: auto-generated, stored in =activault-garage-rpc-secret= K8s Secret)
+- S3 credentials are in the =activault-s3-creds= secret (keys: =AWS_ACCESS_KEY_ID=, =AWS_SECRET_ACCESS_KEY=)
+- Current bucket: =activations= (created by the Helm post-install bootstrap job)
+
+* Bucket structure
+
+Activault writes the following structure to S3:
+
+#+begin_example
+activations/
+  <run_name>/
+    cfg.json                              # full config used for this run (model, hooks, data params)
+    <hook_name>/
+      <uuid>--<batch>_<run>.saved.pt      # activation shards (~300MB each)
+      ...
+#+end_example
+
+Each shard is a PyTorch =.pt= file containing activations for a batch of tokens.
+The =cfg.json= at the run root contains the full config including model name, hooks,
+data config, and progress (=batches_processed=, =total_tokens=, =n_total_files=).
+
+* Garage admin cheatsheet
+
+The Garage admin API is exposed via the proxy on port 8083 (see [[file:activault_k8s.org][activault_k8s.org]]).
+
+Fetch the admin token from the cluster:
+
+#+begin_src sh
+TOKEN=$(minikube kubectl -- get secret activault-garage-rpc-secret -o jsonpath='{.data.adminToken}' | base64 -d)
+#+end_src
+
+List buckets:
+
+#+begin_src sh
+curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8083/v2/ListBuckets"
+#+end_src
+
+Get bucket info (object count, total bytes):
+
+#+begin_src sh
+curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8083/v2/GetBucketInfo?id=<BUCKET_ID>"
+#+end_src
+
+The bucket ID for =activations= can be found from the ListBuckets response.

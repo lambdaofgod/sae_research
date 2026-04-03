@@ -101,7 +101,9 @@ def run_smoke_test(tracking_uri: str):
         assert len(gaps) >= 1, f"Expected at least 1 gap, got {len(gaps)}"
 
         our_gap = [g for g in gaps if g["run_id"] == child_run_id]
-        assert len(our_gap) == 1, f"Expected gap for run {child_run_id}, not found in {gaps}"
+        assert len(our_gap) == 1, (
+            f"Expected gap for run {child_run_id}, not found in {gaps}"
+        )
         assert our_gap[0]["eval_type"] == "core"
         print(f"PASS: gap found for run {child_run_id[:8]}, eval_type=core")
 
@@ -133,7 +135,9 @@ def run_smoke_test(tracking_uri: str):
             eval_types=["core"],
             run_ids=[child_run_id],
         )
-        assert len(gaps_after) == 0, f"Expected 0 gaps after reconciliation, got {len(gaps_after)}"
+        assert len(gaps_after) == 0, (
+            f"Expected 0 gaps after reconciliation, got {len(gaps_after)}"
+        )
         print("PASS: no gaps remain")
 
         # --- Step 5: Verify --force re-discovers the gap ---
@@ -145,7 +149,9 @@ def run_smoke_test(tracking_uri: str):
             run_ids=[child_run_id],
             force=True,
         )
-        assert len(gaps_forced) == 1, f"Expected 1 gap with force=True, got {len(gaps_forced)}"
+        assert len(gaps_forced) == 1, (
+            f"Expected 1 gap with force=True, got {len(gaps_forced)}"
+        )
         print("PASS: force=True re-discovers the gap")
 
         # --- Step 6: Verify metrics in MLflow ---

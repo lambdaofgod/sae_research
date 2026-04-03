@@ -44,8 +44,7 @@ def reconcile_and_eval(
 
     if not experiment_name:
         raise ValueError(
-            "experiment_name is required. "
-            "Example: 'topk_vs_batchtopk_march2024'"
+            "experiment_name is required. Example: 'topk_vs_batchtopk_march2024'"
         )
 
     eval_type_list = [t.strip() for t in eval_types.split(",") if t.strip()]
@@ -174,7 +173,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SAE eval reconciler pipeline")
     parser.add_argument("--compile-only", action="store_true")
     parser.add_argument("--submit", action="store_true")
-    parser.add_argument("--output", required=True, help="path for compiled pipeline YAML")
+    parser.add_argument(
+        "--output", required=True, help="path for compiled pipeline YAML"
+    )
     parser.add_argument("--config", help="eval config YAML (required for --submit)")
     parser.add_argument("--host", default="http://localhost:8087")
     parser.add_argument(
@@ -202,7 +203,9 @@ if __name__ == "__main__":
             cfg[key] = value
 
         if not cfg.get("experiment_name"):
-            parser.error("experiment_name is required (set in config.yaml or --override)")
+            parser.error(
+                "experiment_name is required (set in config.yaml or --override)"
+            )
 
         from kfp.client import Client
 

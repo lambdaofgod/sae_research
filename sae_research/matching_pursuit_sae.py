@@ -111,7 +111,9 @@ class MatchingPursuitAutoEncoder(Dictionary, nn.Module):
         r = x - self.b_dec  # (batch, activation_dim)
 
         # Initialize sparse code
-        z = t.zeros(batch_size, self.dict_size, device=x.device, dtype=self.decoder.weight.dtype)
+        z = t.zeros(
+            batch_size, self.dict_size, device=x.device, dtype=self.decoder.weight.dtype
+        )
 
         # Track selected indices for each batch element at each step
         selected_indices = t.zeros(
@@ -186,11 +188,11 @@ class MatchingPursuitAutoEncoder(Dictionary, nn.Module):
         """
         Load a pretrained autoencoder from a file.
         """
-        checkpoint = t.load(path, map_location='cpu')
+        checkpoint = t.load(path, map_location="cpu")
 
         # Handle both raw state_dict and training checkpoint formats
-        if 'ae' in checkpoint:
-            state_dict = checkpoint['ae']
+        if "ae" in checkpoint:
+            state_dict = checkpoint["ae"]
         else:
             state_dict = checkpoint
 
@@ -227,9 +229,9 @@ class NestedMatchingPursuitAutoEncoder(Dictionary, nn.Module):
         self.dict_size = dict_size
 
         # Validate and sort S values
-        assert all(
-            isinstance(s, int) and s > 0 for s in s_values
-        ), "All s values must be positive integers"
+        assert all(isinstance(s, int) and s > 0 for s in s_values), (
+            "All s values must be positive integers"
+        )
         self.s_values = sorted(s_values)  # Ensure ascending order
         self.max_s = max(self.s_values)
 
@@ -287,10 +289,14 @@ class NestedMatchingPursuitAutoEncoder(Dictionary, nn.Module):
             r = r - z_t.unsqueeze(-1) * selected_dict
 
         # Return max_s sparse code
-        z = t.zeros(batch_size, self.dict_size, device=x.device, dtype=self.decoder.weight.dtype)
+        z = t.zeros(
+            batch_size, self.dict_size, device=x.device, dtype=self.decoder.weight.dtype
+        )
         for i in range(self.max_s):
             idx = selected_indices[:, i : i + 1]
-            coeff = selected_coeffs[:, i : i + 1].to(z.dtype)  # Ensure dtype consistency
+            coeff = selected_coeffs[:, i : i + 1].to(
+                z.dtype
+            )  # Ensure dtype consistency
             z.scatter_add_(-1, idx, coeff)
         return z
 
@@ -340,17 +346,26 @@ class NestedMatchingPursuitAutoEncoder(Dictionary, nn.Module):
         # Create nested sparse codes for each S value
         nested_codes = {}
         for s in self.s_values:
-            z_s = t.zeros(batch_size, self.dict_size, device=x.device, dtype=self.decoder.weight.dtype)
+            z_s = t.zeros(
+                batch_size,
+                self.dict_size,
+                device=x.device,
+                dtype=self.decoder.weight.dtype,
+            )
             # Accumulate first s selections
             for i in range(s):
                 idx = selected_indices[:, i : i + 1]
-                coeff = selected_coeffs[:, i : i + 1].to(z_s.dtype)  # Ensure dtype consistency
+                coeff = selected_coeffs[:, i : i + 1].to(
+                    z_s.dtype
+                )  # Ensure dtype consistency
                 z_s.scatter_add_(-1, idx, coeff)
             nested_codes[s] = z_s
 
         return nested_codes
 
-    def encode_with_info(self, x: Float[t.Tensor, "n_tokens activation_dim"]) -> Tuple[
+    def encode_with_info(
+        self, x: Float[t.Tensor, "n_tokens activation_dim"]
+    ) -> Tuple[
         Dict[int, Float[t.Tensor, "n_tokens dict_size"]],
         Int[t.Tensor, "n_tokens max_s"],
         Float[t.Tensor, "n_tokens max_s"],
@@ -399,11 +414,18 @@ class NestedMatchingPursuitAutoEncoder(Dictionary, nn.Module):
         # Create nested sparse codes for each S value
         nested_codes = {}
         for s in self.s_values:
-            z_s = t.zeros(batch_size, self.dict_size, device=x.device, dtype=self.decoder.weight.dtype)
+            z_s = t.zeros(
+                batch_size,
+                self.dict_size,
+                device=x.device,
+                dtype=self.decoder.weight.dtype,
+            )
             # Accumulate first s selections
             for i in range(s):
                 idx = selected_indices[:, i : i + 1]
-                coeff = selected_coeffs[:, i : i + 1].to(z_s.dtype)  # Ensure dtype consistency
+                coeff = selected_coeffs[:, i : i + 1].to(
+                    z_s.dtype
+                )  # Ensure dtype consistency
                 z_s.scatter_add_(-1, idx, coeff)
             nested_codes[s] = z_s
 
@@ -443,11 +465,11 @@ class NestedMatchingPursuitAutoEncoder(Dictionary, nn.Module):
         """
         Load a pretrained nested autoencoder from a file.
         """
-        checkpoint = t.load(path, map_location='cpu')
+        checkpoint = t.load(path, map_location="cpu")
 
         # Handle both raw state_dict and training checkpoint formats
-        if 'ae' in checkpoint:
-            state_dict = checkpoint['ae']
+        if "ae" in checkpoint:
+            state_dict = checkpoint["ae"]
         else:
             state_dict = checkpoint
 
@@ -559,9 +581,9 @@ class MatchingPursuitTrainer(SAETrainer):
         if s_anneal_steps is None:
             return
 
-        assert (
-            0 <= s_anneal_steps < self.steps
-        ), "s_anneal_steps must be >= 0 and < steps."
+        assert 0 <= s_anneal_steps < self.steps, (
+            "s_anneal_steps must be >= 0 and < steps."
+        )
         # self.s is the target S set for the trainer, not the dictionary's current S
         assert activation_dim > self.s, "activation_dim must be greater than s"
 
@@ -780,9 +802,9 @@ class NestedMatchingPursuitTrainer(SAETrainer):
         if s_weights is None:
             self.s_weights = [1.0 / len(s_values)] * len(s_values)
         else:
-            assert len(s_weights) == len(
-                s_values
-            ), "s_weights must have same length as s_values"
+            assert len(s_weights) == len(s_values), (
+                "s_weights must have same length as s_values"
+            )
             self.s_weights = s_weights
 
         if seed is not None:

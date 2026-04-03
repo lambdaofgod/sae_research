@@ -79,7 +79,6 @@ class InstanceSparseCodingSAE:
 
 
 class InstanceHardThresholdingPursuitSAE(InstanceSparseCodingSAE, base_sae.BaseSAE):
-
     def __init__(
         self,
         d_in: int,
@@ -145,8 +144,7 @@ class MPSAE(InstanceSparseCodingSAE, base_sae.BaseSAE):
 
         # Initialize sparse code
         z = torch.zeros(
-            batch_size, seq_len, self.W_dec.shape[0],
-            device=x.device, dtype=x.dtype
+            batch_size, seq_len, self.W_dec.shape[0], device=x.device, dtype=x.dtype
         )
 
         # Matching pursuit iterations
@@ -160,7 +158,9 @@ class MPSAE(InstanceSparseCodingSAE, base_sae.BaseSAE):
             # Extract correlation values for selected features
             # We need to gather along the last dimension
             j_expanded = j.unsqueeze(-1)  # (batch, seq_len, 1)
-            z_t = torch.gather(correlations, -1, j_expanded).squeeze(-1)  # (batch, seq_len)
+            z_t = torch.gather(correlations, -1, j_expanded).squeeze(
+                -1
+            )  # (batch, seq_len)
 
             # Update sparse code: accumulate selected features
             # We scatter_add to handle cases where same feature is selected multiple times
@@ -207,7 +207,9 @@ def load_from_sae_lens(
         )
     else:
         if k is None:
-            raise ValueError("Parameter 'k' is required for InstanceHardThresholdingPursuitSAE")
+            raise ValueError(
+                "Parameter 'k' is required for InstanceHardThresholdingPursuitSAE"
+            )
         sae = sae_cls(
             d_in, d_sae, k, model_name, hook_layer, device, sae_lens_sae.W_dec.dtype
         )
@@ -339,7 +341,9 @@ def load_dictionary_learning_instance_sae(
 
     # Validate dimensions
     d_sae_actual, d_in_actual = sae.W_dec.data.shape
-    assert d_sae_actual >= d_in_actual, f"d_sae ({d_sae_actual}) should be >= d_in ({d_in_actual})"
+    assert d_sae_actual >= d_in_actual, (
+        f"d_sae ({d_sae_actual}) should be >= d_in ({d_in_actual})"
+    )
 
     # Check decoder normalization
     normalized = sae.check_decoder_norms()

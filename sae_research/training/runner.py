@@ -29,6 +29,7 @@ Example config:
     max_activation_norm_multiple: 10
     buffer_tokens: 250000
 """
+
 import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -69,7 +70,9 @@ def load_config(path: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="YAML-driven SAE training runner")
-    parser.add_argument("--config", type=str, required=True, help="path to YAML config file")
+    parser.add_argument(
+        "--config", type=str, required=True, help="path to YAML config file"
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -87,13 +90,16 @@ def main():
     model_name = cfg["model_name"]
     architectures = cfg["architectures"]
     layers = cfg["layers"]
-    save_dir = f"{cfg['save_dir']}_{model_name}_{'_'.join(architectures)}".replace("/", "_")
+    save_dir = f"{cfg['save_dir']}_{model_name}_{'_'.join(architectures)}".replace(
+        "/", "_"
+    )
 
     use_mlflow = cfg.get("mlflow", True)
     mlflow_parent_run_id = None
     mlflow_parent_run = None
     if use_mlflow:
         from sae_research.training.mlflow_logging import start_sweep_run
+
         mlflow_parent_run = start_sweep_run(
             experiment_name=cfg["mlflow_experiment"],
             model_name=model_name,
@@ -142,6 +148,7 @@ def main():
 
     if mlflow_parent_run is not None:
         import mlflow
+
         mlflow.end_run()
 
     print(f"Total time: {time.time() - start_time}")
@@ -149,8 +156,10 @@ def main():
     hf_repo_id = cfg.get("hf_repo_id")
     if hf_repo_id:
         import huggingface_hub
+
         assert huggingface_hub.repo_exists(repo_id=hf_repo_id, repo_type="model")
         from sae_research.training.cli_runner import push_to_huggingface
+
         push_to_huggingface(save_dir, hf_repo_id)
 
 

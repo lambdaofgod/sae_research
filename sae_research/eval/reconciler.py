@@ -80,12 +80,14 @@ def discover_gaps(
             prefix = EVAL_TYPE_METRIC_PREFIX[eval_type]
             has_metrics = any(k.startswith(prefix) for k in run.data.metrics)
             if force or not has_metrics:
-                gaps.append({
-                    "run_id": run.info.run_id,
-                    "eval_type": eval_type,
-                    "model_name": run.data.params.get("lm_name", ""),
-                    "layer": int(run.data.params.get("layer", "0")),
-                })
+                gaps.append(
+                    {
+                        "run_id": run.info.run_id,
+                        "eval_type": eval_type,
+                        "model_name": run.data.params.get("lm_name", ""),
+                        "layer": int(run.data.params.get("layer", "0")),
+                    }
+                )
 
     return gaps
 
@@ -208,7 +210,9 @@ def reconcile(
 
     completed = []
     for i, gap in enumerate(gaps):
-        print(f"\n[{i+1}/{len(gaps)}] {gap['eval_type']} on run {gap['run_id'][:8]}...")
+        print(
+            f"\n[{i + 1}/{len(gaps)}] {gap['eval_type']} on run {gap['run_id'][:8]}..."
+        )
         metrics = run_eval_for_gap(
             tracking_uri=tracking_uri,
             gap=gap,
@@ -218,11 +222,13 @@ def reconcile(
             output_folder=output_folder,
             eval_config=eval_config,
         )
-        completed.append({
-            "run_id": gap["run_id"],
-            "eval_type": gap["eval_type"],
-            "metrics": metrics,
-        })
+        completed.append(
+            {
+                "run_id": gap["run_id"],
+                "eval_type": gap["eval_type"],
+                "metrics": metrics,
+            }
+        )
         print(f"  Logged {len(metrics)} metrics")
 
     print(f"\nReconciliation complete: {len(completed)}/{len(gaps)} evals run")

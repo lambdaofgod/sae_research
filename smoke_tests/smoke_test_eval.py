@@ -22,7 +22,11 @@ from sae_research.training.mlflow_logging import start_sweep_run
 from sae_research.training.train import trainSAE
 from sae_research.training.config import get_trainer_configs
 from sae_research.eval.sae_wrapper import load_sae_for_eval
-from sae_research.eval.components import run_core_eval, extract_core_metrics, log_eval_to_mlflow
+from sae_research.eval.components import (
+    run_core_eval,
+    extract_core_metrics,
+    log_eval_to_mlflow,
+)
 
 # Reuse the MLflow backend context manager from the training smoke test
 from smoke_tests.smoke_test_mlflow_training import mlflow_backend
@@ -99,7 +103,9 @@ def run_smoke_test(tracking_uri: str):
         print("\n=== Step 2: Pulling SAE from MLflow ===")
         artifact_dir = tempfile.mkdtemp(prefix="eval_smoke_artifacts_")
         for artifact_name in ["ae.pt", "config.json"]:
-            local_path = client.download_artifacts(child_run_id, artifact_name, artifact_dir)
+            local_path = client.download_artifacts(
+                child_run_id, artifact_name, artifact_dir
+            )
             print(f"Downloaded: {local_path}")
 
         # --- Step 3: Load SAE and wrap for sae_bench ---
@@ -111,7 +117,9 @@ def run_smoke_test(tracking_uri: str):
             device="cpu",
             dtype=t.float32,
         )
-        print(f"Loaded SAE: {sae_name}, d_in={wrapped_sae.cfg.d_in}, d_sae={wrapped_sae.cfg.d_sae}")
+        print(
+            f"Loaded SAE: {sae_name}, d_in={wrapped_sae.cfg.d_in}, d_sae={wrapped_sae.cfg.d_sae}"
+        )
         print(f"Architecture: {wrapped_sae.cfg.architecture}")
 
         # --- Step 4: Run core eval with minimal settings ---
@@ -149,7 +157,9 @@ def run_smoke_test(tracking_uri: str):
         print("\n=== Step 6: Verification ===")
         run = client.get_run(child_run_id)
         for key in ["core_l0", "core_explained_variance"]:
-            assert key in run.data.metrics, f"Expected metric {key} not found. Got: {list(run.data.metrics.keys())}"
+            assert key in run.data.metrics, (
+                f"Expected metric {key} not found. Got: {list(run.data.metrics.keys())}"
+            )
             print(f"PASS: {key} = {run.data.metrics[key]}")
 
         assert run.data.tags.get("experiment_name") == "smoke_test"

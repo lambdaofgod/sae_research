@@ -33,7 +33,12 @@ def get_args():
     parser.add_argument(
         "--save_dir", type=str, required=True, help="where to store sweep"
     )
-    parser.add_argument("--mlflow", default=True, action=argparse.BooleanOptionalAction, help="log to MLflow (default: True)")
+    parser.add_argument(
+        "--mlflow",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="log to MLflow (default: True)",
+    )
     parser.add_argument("--dry_run", action="store_true", help="dry run sweep")
     parser.add_argument(
         "--save_checkpoints", action="store_true", help="save checkpoints"
@@ -137,8 +142,10 @@ def run_sae_training(
         # Temporal Activault path: preserve sequence order for adjacent-token pairing
         from dictionary_learning.activault_s3_buffer import S3RCache, create_s3_client
         import os
+
         s3_client = create_s3_client(
-            endpoint_url=os.environ.get("AWS_ENDPOINT_URL") or os.environ.get("S3_ENDPOINT_URL"),
+            endpoint_url=os.environ.get("AWS_ENDPOINT_URL")
+            or os.environ.get("S3_ENDPOINT_URL"),
         )
         cache = S3RCache(
             s3_client=s3_client,
@@ -150,10 +157,14 @@ def run_sae_training(
             return_ids=True,
             shuffle=False,
         )
-        activation_buffer = TemporalS3Buffer(cache, batch_size=sae_batch_size, device=device)
+        activation_buffer = TemporalS3Buffer(
+            cache, batch_size=sae_batch_size, device=device
+        )
         activation_dim = cache.metadata["shape"][-1]
-        print(f"Using temporal activault: prefix={llm_config.activault.s3_prefix}, "
-              f"activation_dim={activation_dim}, dtype={cache.metadata['dtype']}")
+        print(
+            f"Using temporal activault: prefix={llm_config.activault.s3_prefix}, "
+            f"activation_dim={activation_dim}, dtype={cache.metadata['dtype']}"
+        )
     elif is_temporal and llm_config.activault is None:
         raise NotImplementedError(
             "Temporal SAE training from LLM forward passes is not yet supported. "
@@ -162,11 +173,15 @@ def run_sae_training(
     elif llm_config.activault is not None:
         # Activault path: stream pre-computed activations from S3
         activation_buffer, metadata = utils.create_activault_buffer(
-            llm_config.activault, sae_batch_size=sae_batch_size, device=device,
+            llm_config.activault,
+            sae_batch_size=sae_batch_size,
+            device=device,
         )
         activation_dim = metadata["shape"][-1]
-        print(f"Using activault: prefix={llm_config.activault.s3_prefix}, "
-              f"activation_dim={activation_dim}, dtype={metadata['dtype']}")
+        print(
+            f"Using activault: prefix={llm_config.activault.s3_prefix}, "
+            f"activation_dim={activation_dim}, dtype={metadata['dtype']}"
+        )
     else:
         # LLM path: run forward passes to generate activations
         model = AutoModelForCausalLM.from_pretrained(
@@ -364,6 +379,7 @@ def eval_saes(
         # Log eval metrics to the corresponding MLflow child run
         if mlflow_run_ids and idx < len(mlflow_run_ids):
             from sae_research.training.mlflow_logging import log_eval_metrics
+
             log_eval_metrics(mlflow_run_ids[idx], eval_results)
 
     # return the final eval_results for testing purposes
@@ -412,6 +428,7 @@ if __name__ == "__main__":
     mlflow_parent_run = None
     if args.mlflow:
         from sae_research.training.mlflow_logging import start_sweep_run
+
         mlflow_parent_run = start_sweep_run(
             experiment_name=demo_config.mlflow_experiment,
             model_name=args.model_name,
@@ -458,6 +475,7 @@ if __name__ == "__main__":
     # End the parent sweep run
     if mlflow_parent_run is not None:
         import mlflow
+
         mlflow.end_run()
 
     print(f"Total time: {time.time() - start_time}")

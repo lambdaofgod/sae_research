@@ -174,11 +174,11 @@ class ThresholdingAutoEncoderTopK(Dictionary, nn.Module):
         """
         Load a pretrained autoencoder from a file.
         """
-        checkpoint = t.load(path, map_location='cpu')
+        checkpoint = t.load(path, map_location="cpu")
 
         # Handle both raw state_dict and training checkpoint formats
-        if 'ae' in checkpoint:
-            state_dict = checkpoint['ae']
+        if "ae" in checkpoint:
+            state_dict = checkpoint["ae"]
         else:
             state_dict = checkpoint
 
@@ -221,9 +221,9 @@ class NestedThresholdingAutoEncoderTopK(ThresholdingAutoEncoderTopK):
 
     def __init__(self, activation_dim: int, dict_size: int, k_values: list[int]):
         # Validate and sort k values
-        assert all(
-            isinstance(k, int) and k > 0 for k in k_values
-        ), "All k values must be positive integers"
+        assert all(isinstance(k, int) and k > 0 for k in k_values), (
+            "All k values must be positive integers"
+        )
         self.k_values = sorted(k_values)  # Ensure ascending order
         self.max_k = max(self.k_values)
 
@@ -299,7 +299,9 @@ class NestedThresholdingAutoEncoderTopK(ThresholdingAutoEncoderTopK):
 
         return nested_encodings
 
-    def encode_with_info(self, x: Float[t.Tensor, "n_tokens activation_dim"]) -> Tuple[
+    def encode_with_info(
+        self, x: Float[t.Tensor, "n_tokens activation_dim"]
+    ) -> Tuple[
         Dict[int, Float[t.Tensor, "n_tokens dict_size"]],
         Float[t.Tensor, "n_tokens dict_size"],
     ]:
@@ -326,12 +328,12 @@ class NestedThresholdingAutoEncoderTopK(ThresholdingAutoEncoderTopK):
         """
         Load a pretrained nested autoencoder from a file.
         """
-        checkpoint = t.load(path, map_location='cpu')
+        checkpoint = t.load(path, map_location="cpu")
 
         # Handle both raw state_dict and training checkpoint formats
-        if 'ae' in checkpoint:
+        if "ae" in checkpoint:
             # This is a training checkpoint, extract the model state_dict
-            state_dict = checkpoint['ae']
+            state_dict = checkpoint["ae"]
         else:
             # This is already a state_dict
             state_dict = checkpoint
@@ -670,9 +672,9 @@ class NestedThresholdingTopKTrainer(ThresholdingTopKTrainer):
         if k_weights is None:
             self.k_weights = [1.0 / len(k_values)] * len(k_values)
         else:
-            assert len(k_weights) == len(
-                k_values
-            ), "k_weights must have same length as k_values"
+            assert len(k_weights) == len(k_values), (
+                "k_weights must have same length as k_values"
+            )
             self.k_weights = k_weights
 
         # Call parent init with max_k and base dict_class (will be replaced)

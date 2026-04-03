@@ -44,12 +44,26 @@ def start_trainer_run(
     """Start a child MLflow run for one trainer within a sweep."""
     # Extract loggable params from the trainer config
     param_keys = [
-        "activation_dim", "dict_size", "seed", "lr", "layer", "lm_name",
-        "submodule_name", "steps", "warmup_steps", "decay_start",
+        "activation_dim",
+        "dict_size",
+        "seed",
+        "lr",
+        "layer",
+        "lm_name",
+        "submodule_name",
+        "steps",
+        "warmup_steps",
+        "decay_start",
         # Architecture-specific
-        "k", "l1_penalty", "target_l0", "initial_sparsity_penalty",
-        "sparsity_warmup_steps", "k_values", "s",
-        "auxk_alpha", "threshold_beta",
+        "k",
+        "l1_penalty",
+        "target_l0",
+        "initial_sparsity_penalty",
+        "sparsity_warmup_steps",
+        "k_values",
+        "s",
+        "auxk_alpha",
+        "threshold_beta",
     ]
 
     trainer_class_name = ""

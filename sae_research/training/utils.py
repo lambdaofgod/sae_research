@@ -21,9 +21,18 @@ from dictionary_learning.dictionary import (
 )
 
 # Import the custom SAE classes
-from sae_research.thresholding_sae import ThresholdingAutoEncoderTopK, NestedThresholdingAutoEncoderTopK
-from sae_research.matching_pursuit_sae import MatchingPursuitAutoEncoder, NestedMatchingPursuitAutoEncoder
-from sae_research.temporal_sae import TemporalMatryoshkaBatchTopKSAE, TemporalBatchTopKSAE
+from sae_research.thresholding_sae import (
+    ThresholdingAutoEncoderTopK,
+    NestedThresholdingAutoEncoderTopK,
+)
+from sae_research.matching_pursuit_sae import (
+    MatchingPursuitAutoEncoder,
+    NestedMatchingPursuitAutoEncoder,
+)
+from sae_research.temporal_sae import (
+    TemporalMatryoshkaBatchTopKSAE,
+    TemporalBatchTopKSAE,
+)
 
 
 def create_activault_buffer(activault_config, sae_batch_size: int, device: str):
@@ -38,7 +47,9 @@ def create_activault_buffer(activault_config, sae_batch_size: int, device: str):
         create_s3_client,
     )
 
-    endpoint_url = os.environ.get("AWS_ENDPOINT_URL") or os.environ.get("S3_ENDPOINT_URL")
+    endpoint_url = os.environ.get("AWS_ENDPOINT_URL") or os.environ.get(
+        "S3_ENDPOINT_URL"
+    )
     s3_client = create_s3_client(endpoint_url=endpoint_url)
 
     cache = S3RCache(
@@ -53,7 +64,9 @@ def create_activault_buffer(activault_config, sae_batch_size: int, device: str):
     )
 
     buffer = ActivaultS3ActivationBuffer(
-        cache, batch_size=sae_batch_size, device=device,
+        cache,
+        batch_size=sae_batch_size,
+        device=device,
     )
 
     return buffer, cache.metadata
@@ -298,9 +311,15 @@ _DICT_REGISTRY: dict[str, tuple[type, list[str]]] = {
     "MatryoshkaBatchTopKSAE": (MatryoshkaBatchTopKSAE, ["k"]),
     "JumpReluAutoEncoder": (JumpReluAutoEncoder, []),
     "ThresholdingAutoEncoderTopK": (ThresholdingAutoEncoderTopK, ["k"]),
-    "NestedThresholdingAutoEncoderTopK": (NestedThresholdingAutoEncoderTopK, ["k_values"]),
+    "NestedThresholdingAutoEncoderTopK": (
+        NestedThresholdingAutoEncoderTopK,
+        ["k_values"],
+    ),
     "MatchingPursuitAutoEncoder": (MatchingPursuitAutoEncoder, ["s"]),
-    "NestedMatchingPursuitAutoEncoder": (NestedMatchingPursuitAutoEncoder, ["s_values"]),
+    "NestedMatchingPursuitAutoEncoder": (
+        NestedMatchingPursuitAutoEncoder,
+        ["s_values"],
+    ),
 }
 
 # Temporal SAEs use from_config(ae_path, trainer_cfg, device) instead of constructor + load_state_dict
@@ -356,7 +375,9 @@ def load_dictionary(base_path: str, device: str) -> tuple:
     elif "decoder.weight" in state_dict:
         activation_dim, dict_size = state_dict["decoder.weight"].shape
     else:
-        raise ValueError(f"Cannot determine dimensions from state_dict keys: {list(state_dict.keys())}")
+        raise ValueError(
+            f"Cannot determine dimensions from state_dict keys: {list(state_dict.keys())}"
+        )
 
     # Instantiate with constructor args
     constructor_kwargs = {"activation_dim": activation_dim, "dict_size": dict_size}

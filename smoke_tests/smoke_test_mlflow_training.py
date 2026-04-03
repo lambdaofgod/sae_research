@@ -39,6 +39,7 @@ def find_free_port():
 def wait_for_server(url, timeout=30):
     import urllib.request
     import urllib.error
+
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -68,11 +69,16 @@ def mlflow_backend(backend: str):
 
         server_proc = subprocess.Popen(
             [
-                "mlflow", "server",
-                "--host", "127.0.0.1",
-                "--port", str(port),
-                "--backend-store-uri", f"sqlite:///{tmpdir}/mlflow.db",
-                "--default-artifact-root", os.path.join(tmpdir, "artifacts"),
+                "mlflow",
+                "server",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--backend-store-uri",
+                f"sqlite:///{tmpdir}/mlflow.db",
+                "--default-artifact-root",
+                os.path.join(tmpdir, "artifacts"),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -152,7 +158,9 @@ def run_smoke_test(tracking_uri: str):
         mlflow.end_run()
 
         # --- Assertions ---
-        assert len(mlflow_run_ids) == 1, f"Expected 1 child run, got {len(mlflow_run_ids)}"
+        assert len(mlflow_run_ids) == 1, (
+            f"Expected 1 child run, got {len(mlflow_run_ids)}"
+        )
         child_run_id = mlflow_run_ids[0]
 
         client = mlflow.MlflowClient()
@@ -176,7 +184,9 @@ def run_smoke_test(tracking_uri: str):
         artifacts = client.list_artifacts(child_run_id)
         artifact_names = [a.path for a in artifacts]
         assert "ae.pt" in artifact_names, f"ae.pt not in artifacts: {artifact_names}"
-        assert "config.json" in artifact_names, f"config.json not in artifacts: {artifact_names}"
+        assert "config.json" in artifact_names, (
+            f"config.json not in artifacts: {artifact_names}"
+        )
         print(f"PASS: artifacts logged ({artifact_names})")
 
         print("\nAll smoke tests passed!")

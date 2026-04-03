@@ -28,7 +28,7 @@ def log_stats(
     activations_split_by_head: bool,
     transcoder: bool,
     mlflow_run_ids: list[str] = [],
-    verbose: bool=False,
+    verbose: bool = False,
 ):
     with t.no_grad():
         # quick hack to make sure all trainers get the same x
@@ -55,10 +55,17 @@ def log_stats(
                 l0 = (f != 0).float().sum(dim=-1).mean().item()
 
             if verbose:
-                print(f"Step {step}: L0 = {l0}, frac_variance_explained = {frac_variance_explained}")
+                print(
+                    f"Step {step}: L0 = {l0}, frac_variance_explained = {frac_variance_explained}"
+                )
 
             # log parameters from training
-            log.update({k: v.cpu().item() if isinstance(v, t.Tensor) else v for k, v in losslog.items()})
+            log.update(
+                {
+                    k: v.cpu().item() if isinstance(v, t.Tensor) else v
+                    for k, v in losslog.items()
+                }
+            )
             log["l0"] = l0
             trainer_log = trainer.get_logging_parameters()
             for name, value in trainer_log.items():
@@ -68,6 +75,7 @@ def log_stats(
 
             if mlflow_run_ids:
                 log_step_metrics(mlflow_run_ids[i], log, step)
+
 
 def get_norm_factor(data, steps: int) -> float:
     """Per Section 3.1, find a fixed scalar factor so activation vectors have unit mean squared norm.
@@ -80,12 +88,14 @@ def get_norm_factor(data, steps: int) -> float:
     total_mean_squared_norm = 0
     count = 0
 
-    for step, act_BD in enumerate(tqdm(data, total=steps, desc="Calculating norm factor")):
+    for step, act_BD in enumerate(
+        tqdm(data, total=steps, desc="Calculating norm factor")
+    ):
         if step > steps:
             break
 
         count += 1
-        mean_squared_norm = t.mean(t.sum(act_BD ** 2, dim=1))
+        mean_squared_norm = t.mean(t.sum(act_BD**2, dim=1))
         total_mean_squared_norm += mean_squared_norm
 
     average_mean_squared_norm = total_mean_squared_norm / count
@@ -97,24 +107,23 @@ def get_norm_factor(data, steps: int) -> float:
     return norm_factor
 
 
-
 def trainSAE(
     data,
     trainer_configs: list[dict],
     steps: int,
     use_mlflow: bool = False,
     mlflow_parent_run_id: Optional[str] = None,
-    save_steps:Optional[list[int]]=None,
-    save_dir:Optional[str]=None,
-    log_steps:Optional[int]=None,
-    activations_split_by_head:bool=False,
-    transcoder:bool=False,
-    run_cfg:dict={},
-    normalize_activations:bool=False,
-    verbose:bool=False,
-    device:str="cuda",
+    save_steps: Optional[list[int]] = None,
+    save_dir: Optional[str] = None,
+    log_steps: Optional[int] = None,
+    activations_split_by_head: bool = False,
+    transcoder: bool = False,
+    run_cfg: dict = {},
+    normalize_activations: bool = False,
+    verbose: bool = False,
+    device: str = "cuda",
     autocast_dtype: t.dtype = t.float32,
-    backup_steps:Optional[int]=None,
+    backup_steps: Optional[int] = None,
 ):
     """
     Train SAEs using the given trainers
@@ -127,7 +136,11 @@ def trainSAE(
     """
 
     device_type = "cuda" if "cuda" in device else "cpu"
-    autocast_context = nullcontext() if device_type == "cpu" else t.autocast(device_type=device_type, dtype=autocast_dtype)
+    autocast_context = (
+        nullcontext()
+        if device_type == "cpu"
+        else t.autocast(device_type=device_type, dtype=autocast_dtype)
+    )
 
     trainers = []
     trainer_classes = []
@@ -141,11 +154,16 @@ def trainSAE(
     mlflow_run_ids = []
     if use_mlflow:
         import mlflow
+
         for i, trainer in enumerate(trainers):
             run = start_trainer_run(
                 parent_run_id=mlflow_parent_run_id,
                 trainer_index=i,
-                trainer_config={"trainer": trainer_classes[i], **trainer.config, **run_cfg},
+                trainer_config={
+                    "trainer": trainer_classes[i],
+                    **trainer.config,
+                    **run_cfg,
+                },
             )
             mlflow_run_ids.append(run.info.run_id)
             # End the child run so the parent stays active for the next child
@@ -188,7 +206,6 @@ def trainSAE(
     actual_steps = 0
     try:
         for step, act in enumerate(tqdm(data, total=steps)):
-
             act = act.to(dtype=autocast_dtype)
 
             if normalize_activations:
@@ -202,8 +219,13 @@ def trainSAE(
             # logging
             if (use_mlflow or verbose) and step % log_steps == 0:
                 log_stats(
-                    trainers, step, act, activations_split_by_head, transcoder,
-                    mlflow_run_ids=mlflow_run_ids, verbose=verbose,
+                    trainers,
+                    step,
+                    act,
+                    activations_split_by_head,
+                    transcoder,
+                    mlflow_run_ids=mlflow_run_ids,
+                    verbose=verbose,
                 )
 
             # saving
@@ -219,7 +241,9 @@ def trainSAE(
                     if not os.path.exists(os.path.join(dir, "checkpoints")):
                         os.mkdir(os.path.join(dir, "checkpoints"))
 
-                    checkpoint = {k: v.cpu() for k, v in trainer.ae.state_dict().items()}
+                    checkpoint = {
+                        k: v.cpu() for k, v in trainer.ae.state_dict().items()
+                    }
                     t.save(
                         checkpoint,
                         os.path.join(dir, "checkpoints", f"ae_{step}.pt"),
@@ -250,7 +274,9 @@ def trainSAE(
                 with autocast_context:
                     trainer.update(step, act)
     except StopIteration:
-        print(f"\nWARNING: Data exhausted at step {actual_steps} of {steps} requested. Saving current state.")
+        print(
+            f"\nWARNING: Data exhausted at step {actual_steps} of {steps} requested. Saving current state."
+        )
 
     # save final SAEs
     for save_dir, trainer in zip(save_dirs, trainers):

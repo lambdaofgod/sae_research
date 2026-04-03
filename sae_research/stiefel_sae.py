@@ -77,9 +77,7 @@ class StiefelManifold(_StiefelBase):
         # TOTAL PEAK MEMORY: ~3 GB for dict_size=16384, float32
         return u @ x.transpose(-1, -2) - x @ u.transpose(-1, -2)
 
-    def _transp_follow_one(
-        self, x: t.Tensor, v: t.Tensor, *, u: t.Tensor
-    ) -> t.Tensor:
+    def _transp_follow_one(self, x: t.Tensor, v: t.Tensor, *, u: t.Tensor) -> t.Tensor:
         """
         Parallel transport along Cayley retraction.
 
@@ -258,9 +256,9 @@ class StiefelNestedThresholdingAutoEncoderTopK(NestedThresholdingAutoEncoderTopK
 
     def __init__(self, activation_dim: int, dict_size: int, k_values: list[int]):
         # Validate and sort k values
-        assert all(
-            isinstance(k, int) and k > 0 for k in k_values
-        ), "All k values must be positive integers"
+        assert all(isinstance(k, int) and k > 0 for k in k_values), (
+            "All k values must be positive integers"
+        )
         self.k_values = sorted(k_values)
         self.max_k = max(self.k_values)
 
@@ -292,11 +290,11 @@ class StiefelNestedThresholdingAutoEncoderTopK(NestedThresholdingAutoEncoderTopK
         """
         Load a pretrained Stiefel nested autoencoder from a file.
         """
-        checkpoint = t.load(path, map_location='cpu')
+        checkpoint = t.load(path, map_location="cpu")
 
         # Handle both raw state_dict and training checkpoint formats
-        if 'ae' in checkpoint:
-            state_dict = checkpoint['ae']
+        if "ae" in checkpoint:
+            state_dict = checkpoint["ae"]
         else:
             state_dict = checkpoint
 
@@ -306,14 +304,14 @@ class StiefelNestedThresholdingAutoEncoderTopK(NestedThresholdingAutoEncoderTopK
             if key in state_dict:
                 decoder_weight_key = key
                 break
-        
+
         if decoder_weight_key is None:
-            available_keys = [k for k in state_dict.keys() if 'decoder' in k]
+            available_keys = [k for k in state_dict.keys() if "decoder" in k]
             raise KeyError(
                 f"Could not find decoder weight in state dict. "
                 f"Available decoder keys: {available_keys}"
             )
-        
+
         # For Stiefel, decoder._weight has shape (dict_size, activation_dim)
         # For regular, decoder.weight has shape (activation_dim, dict_size)
         if decoder_weight_key == "decoder._weight":
@@ -329,11 +327,11 @@ class StiefelNestedThresholdingAutoEncoderTopK(NestedThresholdingAutoEncoderTopK
                 raise ValueError(f"k_values={k_values} != saved k_values={saved_k}")
 
         autoencoder = cls(activation_dim, dict_size, k_values)
-        
+
         # Use strict=False to allow missing keys from old checkpoints
         # and to handle different weight keys (decoder.weight vs decoder._weight)
         autoencoder.load_state_dict(state_dict, strict=False)
-        
+
         if device is not None:
             autoencoder.to(device)
         return autoencoder

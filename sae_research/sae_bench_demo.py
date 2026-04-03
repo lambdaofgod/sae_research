@@ -138,10 +138,13 @@ print(f"d_in: {d_in}, d_sae: {d_sae}")
 
 # Create IHTP SAEs with k=5 and k=10 reusing baseline weights
 ihtp_sae_k5 = InstanceHardThresholdingPursuitSAE(
-    d_in=d_in, d_sae=d_sae, k=5,
+    d_in=d_in,
+    d_sae=d_sae,
+    k=5,
     model_name=model_name,
     hook_layer=hook_layer,
-    device=device, dtype=torch_dtype
+    device=device,
+    dtype=torch_dtype,
 )
 ihtp_sae_k5.W_dec.data = sae.W_dec.data.clone()
 ihtp_sae_k5.b_dec.data = sae.b_dec.data.clone()
@@ -149,10 +152,13 @@ ihtp_sae_k5.W_enc.data = sae.W_enc.data.clone()
 ihtp_sae_k5.b_enc.data = sae.b_enc.data.clone()
 
 ihtp_sae_k10 = InstanceHardThresholdingPursuitSAE(
-    d_in=d_in, d_sae=d_sae, k=10,
+    d_in=d_in,
+    d_sae=d_sae,
+    k=10,
     model_name=model_name,
     hook_layer=hook_layer,
-    device=device, dtype=torch_dtype
+    device=device,
+    dtype=torch_dtype,
 )
 ihtp_sae_k10.W_dec.data = sae.W_dec.data.clone()
 ihtp_sae_k10.b_dec.data = sae.b_dec.data.clone()
@@ -161,10 +167,13 @@ ihtp_sae_k10.b_enc.data = sae.b_enc.data.clone()
 
 # Create MPSAE with s=50 and s=100 reusing baseline weights
 mpsae_s50 = MPSAE(
-    d_in=d_in, d_sae=d_sae, s=50,
+    d_in=d_in,
+    d_sae=d_sae,
+    s=50,
     model_name=model_name,
     hook_layer=hook_layer,
-    device=device, dtype=torch_dtype
+    device=device,
+    dtype=torch_dtype,
 )
 mpsae_s50.W_dec.data = sae.W_dec.data.clone()
 mpsae_s50.b_dec.data = sae.b_dec.data.clone()
@@ -172,10 +181,13 @@ mpsae_s50.W_enc.data = sae.W_enc.data.clone()
 mpsae_s50.b_enc.data = sae.b_enc.data.clone()
 
 mpsae_s100 = MPSAE(
-    d_in=d_in, d_sae=d_sae, s=100,
+    d_in=d_in,
+    d_sae=d_sae,
+    s=100,
     model_name=model_name,
     hook_layer=hook_layer,
-    device=device, dtype=torch_dtype
+    device=device,
+    dtype=torch_dtype,
 )
 mpsae_s100.W_dec.data = sae.W_dec.data.clone()
 mpsae_s100.b_dec.data = sae.b_dec.data.clone()
@@ -204,8 +216,7 @@ sae.cfg.training_tokens = 200_000_000
 # Configure IHTP SAEs
 for sae_obj in [ihtp_sae_k5, ihtp_sae_k10]:
     sae_obj.cfg = custom_sae_config.CustomSAEConfig(
-        model_name, d_in=d_in, d_sae=d_sae,
-        hook_name=hook_name, hook_layer=hook_layer
+        model_name, d_in=d_in, d_sae=d_sae, hook_name=hook_name, hook_layer=hook_layer
     )
     sae_obj.cfg.dtype = str_dtype
     sae_obj.cfg.architecture = "ihtp"
@@ -214,8 +225,7 @@ for sae_obj in [ihtp_sae_k5, ihtp_sae_k10]:
 # Configure MPSAE
 for sae_obj in [mpsae_s50, mpsae_s100]:
     sae_obj.cfg = custom_sae_config.CustomSAEConfig(
-        model_name, d_in=d_in, d_sae=d_sae,
-        hook_name=hook_name, hook_layer=hook_layer
+        model_name, d_in=d_in, d_sae=d_sae, hook_name=hook_name, hook_layer=hook_layer
     )
     sae_obj.cfg.dtype = str_dtype
     sae_obj.cfg.architecture = "mpsae"
