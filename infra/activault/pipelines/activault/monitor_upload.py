@@ -11,7 +11,6 @@ Examples:
 The Garage admin token is read from the cluster secret automatically.
 """
 
-import argparse
 import json
 import subprocess
 import sys
@@ -94,23 +93,14 @@ def fmt_duration(seconds):
     return f"{m}m"
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Monitor Garage upload progress")
-    parser.add_argument(
-        "--watch",
-        type=int,
-        default=60,
-        help="Observation window in seconds (default: 60)",
-    )
-    parser.add_argument(
-        "--total-gb",
-        type=float,
-        default=1012.5,
-        help="Expected total size in GB (default: 1012.5)",
-    )
-    args = parser.parse_args()
+def main(watch: int = 60, total_gb: float = 1012.5):
+    """Monitor Garage bucket upload progress and estimate completion time.
 
-    total_bytes = args.total_gb * 1e9
+    Args:
+        watch: Observation window in seconds.
+        total_gb: Expected total size in GB.
+    """
+    total_bytes = total_gb * 1e9
     token = get_admin_token()
 
     print(f"Sampling start...")
@@ -119,8 +109,8 @@ def main():
     start_objects = start_info["objects"]
     print(f"  Objects: {start_objects}  Size: {fmt_bytes(start_bytes)}")
 
-    print(f"Waiting {args.watch}s...")
-    time.sleep(args.watch)
+    print(f"Waiting {watch}s...")
+    time.sleep(watch)
 
     print(f"Sampling end...")
     end_info = get_bucket_info(token)
@@ -130,10 +120,10 @@ def main():
 
     delta_bytes = end_bytes - start_bytes
     delta_objects = end_objects - start_objects
-    speed_bps = delta_bytes / args.watch if args.watch > 0 else 0
+    speed_bps = delta_bytes / watch if watch > 0 else 0
 
     print()
-    print(f"--- Results ({args.watch}s window) ---")
+    print(f"--- Results ({watch}s window) ---")
     print(f"New objects:  {delta_objects}")
     print(f"Data written: {fmt_bytes(delta_bytes)}")
     print(f"Upload speed: {fmt_bytes(speed_bps)}/s ({fmt_bytes(speed_bps * 3600)}/h)")
@@ -153,4 +143,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import fire
+
+    fire.Fire(main)

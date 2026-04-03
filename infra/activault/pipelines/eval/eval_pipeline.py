@@ -166,50 +166,40 @@ def eval_pipeline(
     )
 
 
-if __name__ == "__main__":
-    import argparse
+def main(
+    output: str,
+    submit: bool = False,
+    config: str = "",
+    host: str = "http://localhost:8087",
+    **overrides,
+):
+    """Compile and optionally submit SAE eval reconciler pipeline.
+
+    Extra keyword arguments override config values, e.g.:
+        --experiment_name=my_experiment --force=true
+    """
     import yaml
 
-    parser = argparse.ArgumentParser(description="SAE eval reconciler pipeline")
-    parser.add_argument("--compile-only", action="store_true")
-    parser.add_argument("--submit", action="store_true")
-    parser.add_argument(
-        "--output", required=True, help="path for compiled pipeline YAML"
-    )
-    parser.add_argument("--config", help="eval config YAML (required for --submit)")
-    parser.add_argument("--host", default="http://localhost:8087")
-    parser.add_argument(
-        "--override",
-        action="append",
-        default=[],
-        help="Override config values: --override key=value",
-    )
-    args = parser.parse_args()
+    compiler.Compiler().compile(eval_pipeline, output)
+    print(f"Compiled pipeline to {output}")
 
-    compiler.Compiler().compile(eval_pipeline, args.output)
-    print(f"Compiled pipeline to {args.output}")
-
-    if args.submit:
-        if not args.config:
-            parser.error("--config is required when using --submit")
-        with open(args.config) as f:
+    if submit:
+        if not config:
+            raise ValueError("--config is required when using --submit")
+        with open(config) as f:
             cfg = yaml.safe_load(f)
 
-        # Apply overrides
-        for override in args.override:
-            key, value = override.split("=", 1)
-            if value.lower() in ("true", "false"):
-                value = value.lower() == "true"
+        for key, value in overrides.items():
             cfg[key] = value
 
         if not cfg.get("experiment_name"):
-            parser.error(
-                "experiment_name is required (set in config.yaml or --override)"
+            raise ValueError(
+                "experiment_name is required (set in config.yaml or via override)"
             )
 
         from kfp.client import Client
 
-        client = Client(host=args.host)
+        client = Client(host=host)
         run = client.create_run_from_pipeline_func(
             eval_pipeline,
             arguments=cfg,
@@ -218,3 +208,9 @@ if __name__ == "__main__":
             enable_caching=False,
         )
         print(f"Run ID: {run.run_id}")
+
+
+if __name__ == "__main__":
+    import fire
+
+    fire.Fire(main)

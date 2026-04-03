@@ -34,7 +34,6 @@ import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-import argparse
 import time
 
 import yaml
@@ -68,14 +67,13 @@ def load_config(path: str) -> dict:
     return cfg
 
 
-def main():
-    parser = argparse.ArgumentParser(description="YAML-driven SAE training runner")
-    parser.add_argument(
-        "--config", type=str, required=True, help="path to YAML config file"
-    )
-    args = parser.parse_args()
+def main(config: str):
+    """YAML-driven SAE training runner.
 
-    cfg = load_config(args.config)
+    Args:
+        config: Path to YAML config file.
+    """
+    cfg = load_config(config)
 
     from datasets import config as ds_config
 
@@ -164,4 +162,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import fire
+
+    fire.Fire(main)

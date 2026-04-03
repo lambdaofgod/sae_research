@@ -10,7 +10,6 @@ Usage:
     uv run python smoke_tests/smoke_test_eval.py --backend=local    # uses local server
 """
 
-import argparse
 import os
 import shutil
 import tempfile
@@ -174,19 +173,17 @@ def run_smoke_test(tracking_uri: str):
             shutil.rmtree(artifact_dir, ignore_errors=True)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="MLflow eval smoke test")
-    parser.add_argument(
-        "--backend",
-        choices=["kubernetes", "local"],
-        default="kubernetes",
-        help="MLflow backend to test against (default: kubernetes)",
-    )
-    args = parser.parse_args()
+def main(backend: str = "kubernetes"):
+    """MLflow eval smoke test.
 
-    with mlflow_backend(args.backend) as tracking_uri:
+    Args:
+        backend: MLflow backend -- "kubernetes" or "local".
+    """
+    with mlflow_backend(backend) as tracking_uri:
         run_smoke_test(tracking_uri)
 
 
 if __name__ == "__main__":
-    main()
+    import fire
+
+    fire.Fire(main)

@@ -125,46 +125,45 @@ def training_pipeline(
     )
 
 
-if __name__ == "__main__":
-    import argparse
+def main(
+    output: str,
+    submit: bool = False,
+    host: str = "http://localhost:8082",
+    save_dir: str = "sae_run",
+    model_name: str = "google/gemma-2-2b-it",
+    layers: str = "13",
+    architectures: str = "batch_top_k",
+    device: str = "cuda:0",
+    save_checkpoints: bool = False,
+    mlflow: bool = True,
+):
+    """Compile and optionally submit SAE training pipeline."""
+    compiler.Compiler().compile(training_pipeline, output)
+    print(f"Compiled to {output}")
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--compile-only", action="store_true")
-    parser.add_argument("--submit", action="store_true")
-    parser.add_argument(
-        "--output", required=True, help="path for compiled pipeline YAML"
-    )
-    parser.add_argument("--host", default="http://localhost:8082")
-    # Override pipeline defaults
-    parser.add_argument("--save-dir", default="sae_run")
-    parser.add_argument("--model-name", default="google/gemma-2-2b-it")
-    parser.add_argument("--layers", default="13")
-    parser.add_argument("--architectures", default="batch_top_k")
-    parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--save-checkpoints", action="store_true")
-    parser.add_argument("--no-mlflow", action="store_true")
-    args = parser.parse_args()
-
-    compiler.Compiler().compile(training_pipeline, args.output)
-    print(f"Compiled to {args.output}")
-
-    if args.submit:
+    if submit:
         from kfp.client import Client
 
-        client = Client(host=args.host)
+        client = Client(host=host)
         run = client.create_run_from_pipeline_func(
             training_pipeline,
             arguments={
-                "save_dir": args.save_dir,
-                "model_name": args.model_name,
-                "layers": args.layers,
-                "architectures": args.architectures,
-                "device": args.device,
-                "save_checkpoints": args.save_checkpoints,
-                "mlflow": not args.no_mlflow,
+                "save_dir": save_dir,
+                "model_name": model_name,
+                "layers": layers,
+                "architectures": architectures,
+                "device": device,
+                "save_checkpoints": save_checkpoints,
+                "mlflow": mlflow,
             },
             experiment_name="sae-training",
-            run_name=f"{args.model_name}_{args.architectures}",
+            run_name=f"{model_name}_{architectures}",
             enable_caching=False,
         )
         print(f"Run ID: {run.run_id}")
+
+
+if __name__ == "__main__":
+    import fire
+
+    fire.Fire(main)

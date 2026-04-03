@@ -150,29 +150,22 @@ def activault_pipeline(
     )
 
 
-if __name__ == "__main__":
-    import argparse
-    import json
+def main(
+    output: str,
+    submit: bool = False,
+    config: str = "",
+    host: str = "http://localhost:8081",
+):
+    """Compile and optionally submit activault collection pipeline."""
     import yaml
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--compile-only", action="store_true")
-    parser.add_argument("--submit", action="store_true")
-    parser.add_argument(
-        "--output", required=True, help="path for compiled pipeline YAML"
-    )
-    parser.add_argument(
-        "--config", help="activault config YAML (required for --submit)"
-    )
-    parser.add_argument("--host", default="http://localhost:8081")
-    args = parser.parse_args()
+    compiler.Compiler().compile(activault_pipeline, output)
+    print(f"Compiled to {output}")
 
-    compiler.Compiler().compile(activault_pipeline, args.output)
-
-    if args.submit:
-        if not args.config:
-            parser.error("--config is required when using --submit")
-        with open(args.config) as f:
+    if submit:
+        if not config:
+            raise ValueError("--config is required when using --submit")
+        with open(config) as f:
             cfg = yaml.safe_load(f)
 
         arguments = {
@@ -192,7 +185,7 @@ if __name__ == "__main__":
 
         from kfp.client import Client
 
-        client = Client(host=args.host)
+        client = Client(host=host)
         run = client.create_run_from_pipeline_func(
             activault_pipeline,
             arguments=arguments,
@@ -201,3 +194,9 @@ if __name__ == "__main__":
             enable_caching=False,
         )
         print(f"Run ID: {run.run_id}")
+
+
+if __name__ == "__main__":
+    import fire
+
+    fire.Fire(main)

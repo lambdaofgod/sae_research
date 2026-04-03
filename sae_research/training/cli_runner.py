@@ -5,8 +5,6 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import torch as t
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import argparse
-import itertools
 import random
 import json
 import time
@@ -26,52 +24,6 @@ from dictionary_learning.evaluation import evaluate
 from sae_research.training.train import trainSAE
 from sae_research.training import utils
 from sae_research.training.temporal_buffer import TemporalS3Buffer
-
-
-def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--save_dir", type=str, required=True, help="where to store sweep"
-    )
-    parser.add_argument(
-        "--mlflow",
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help="log to MLflow (default: True)",
-    )
-    parser.add_argument("--dry_run", action="store_true", help="dry run sweep")
-    parser.add_argument(
-        "--save_checkpoints", action="store_true", help="save checkpoints"
-    )
-    parser.add_argument(
-        "--layers", type=int, nargs="+", required=True, help="layers to train SAE on"
-    )
-    parser.add_argument(
-        "--model_name",
-        type=str,
-        required=True,
-        help="which language model to use",
-    )
-    parser.add_argument(
-        "--architectures",
-        type=str,
-        nargs="+",
-        choices=[e.value for e in demo_config.TrainerType],
-        required=True,
-        help="which SAE architectures to train",
-    )
-    parser.add_argument(
-        "--device", type=str, default="cuda:0", help="device to train on"
-    )
-    parser.add_argument(
-        "--hf_repo_id", type=str, help="Hugging Face repo ID to push results to"
-    )
-    parser.add_argument(
-        "--mixed_dataset", action="store_true", help="use mixed dataset"
-    )
-
-    args = parser.parse_args()
-    return args
 
 
 def run_sae_training(
@@ -397,43 +349,52 @@ def push_to_huggingface(save_dir: str, repo_id: str):
     )
 
 
-if __name__ == "__main__":
-    """python runner.py --save_dir run2 --model_name EleutherAI/pythia-70m-deduped --layers 3 --architectures standard jump_relu batch_top_k top_k gated
-    python runner.py --save_dir run3 --model_name google/gemma-2-2b --layers 12 --architectures standard top_k"""
-    args = get_args()
+def cli_main(
+    save_dir: str,
+    model_name: str,
+    layers: list[int],
+    architectures: list[str],
+    device: str = "cuda:0",
+    mlflow: bool = True,
+    dry_run: bool = False,
+    save_checkpoints: bool = False,
+    hf_repo_id: str | None = None,
+    mixed_dataset: bool = False,
+):
+    """Train SAEs with config defaults from demo_config.
 
-    hf_repo_id = args.hf_repo_id
+    Prefer the YAML-driven runner (python -m sae_research.training.runner) for
+    new workflows. This CLI preserves the legacy interface.
 
+    Usage:
+        python -m sae_research.training.cli_runner \\
+            --save_dir=run2 \\
+            --model_name=EleutherAI/pythia-70m-deduped \\
+            --layers='[3]' \\
+            --architectures='[standard, jump_relu, batch_top_k]'
+    """
     if hf_repo_id:
         assert huggingface_hub.repo_exists(repo_id=hf_repo_id, repo_type="model")
 
-    # This prevents random CUDA out of memory errors
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-    # Rarely I have internet issues on cloud GPUs and then the streaming read fails
-    # Hopefully the outage is shorter than 100 * 20 seconds
     config.STREAMING_READ_MAX_RETRIES = 100  # pyrefly: ignore [bad-assignment]
     config.STREAMING_READ_RETRY_INTERVAL = 20  # pyrefly: ignore [bad-assignment]
 
     start_time = time.time()
 
-    save_dir = (
-        f"{args.save_dir}_{args.model_name}_{'_'.join(args.architectures)}".replace(
-            "/", "_"
-        )
-    )
+    save_dir = f"{save_dir}_{model_name}_{'_'.join(architectures)}".replace("/", "_")
 
-    # Start MLflow parent run for the sweep
     mlflow_parent_run_id = None
     mlflow_parent_run = None
-    if args.mlflow:
+    if mlflow:
         from sae_research.training.mlflow_logging import start_sweep_run
 
         mlflow_parent_run = start_sweep_run(
             experiment_name=demo_config.mlflow_experiment,
-            model_name=args.model_name,
-            layers=args.layers,
-            architectures=args.architectures,
+            model_name=model_name,
+            layers=layers,
+            architectures=architectures,
             run_cfg={
                 "num_tokens": demo_config.num_tokens,
                 "save_dir": save_dir,
@@ -442,43 +403,48 @@ if __name__ == "__main__":
         mlflow_parent_run_id = mlflow_parent_run.info.run_id
 
     all_mlflow_run_ids = []
-    for layer in args.layers:
+    for layer in layers:
         mlflow_run_ids = run_sae_training(
-            model_name=args.model_name,
+            model_name=model_name,
             layer=layer,
             save_dir=save_dir,
-            device=args.device,
-            architectures=args.architectures,
+            device=device,
+            architectures=architectures,
             num_tokens=demo_config.num_tokens,
             random_seeds=demo_config.random_seeds,
             dictionary_widths=demo_config.dictionary_widths,
             learning_rates=demo_config.learning_rates,
-            dry_run=args.dry_run,
-            use_mlflow=args.mlflow,
+            dry_run=dry_run,
+            use_mlflow=mlflow,
             mlflow_parent_run_id=mlflow_parent_run_id,
-            save_checkpoints=args.save_checkpoints,
-            mixed_dataset=args.mixed_dataset,
+            save_checkpoints=save_checkpoints,
+            mixed_dataset=mixed_dataset,
         )
         all_mlflow_run_ids.extend(mlflow_run_ids)
 
     ae_paths = utils.get_nested_folders(save_dir)
 
     eval_saes(
-        args.model_name,
+        model_name,
         ae_paths,
         demo_config.eval_num_inputs,
-        args.device,
+        device,
         overwrite_prev_results=True,
         mlflow_run_ids=all_mlflow_run_ids,
     )
 
-    # End the parent sweep run
     if mlflow_parent_run is not None:
-        import mlflow
+        import mlflow as mlflow_lib
 
-        mlflow.end_run()
+        mlflow_lib.end_run()
 
     print(f"Total time: {time.time() - start_time}")
 
     if hf_repo_id:
         push_to_huggingface(save_dir, hf_repo_id)
+
+
+if __name__ == "__main__":
+    import fire
+
+    fire.Fire(cli_main)
