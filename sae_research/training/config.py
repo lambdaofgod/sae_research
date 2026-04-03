@@ -191,7 +191,7 @@ mlflow_experiment = _defaults_cfg["mlflow_experiment"]
 class BaseTrainerConfig:
     activation_dim: int
     device: str
-    layer: str
+    layer: int
     lm_name: str
     submodule_name: str
     trainer: Type[Any]
@@ -351,7 +351,7 @@ def get_trainer_configs(
     dict_sizes: list[int],
     model_name: str,
     device: str,
-    layer: str,
+    layer: int,
     submodule_name: str,
     steps: int,
     warmup_steps: int = WARMUP_STEPS,

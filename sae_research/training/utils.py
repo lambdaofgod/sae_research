@@ -168,9 +168,9 @@ def hf_mixed_dataset_to_generator(
     frac = Fraction(pretrain_frac).limit_denominator()
     n_pretrain = frac.numerator
     n_chat = frac.denominator - n_pretrain
-    eos_token = tokenizer.eos_token
+    eos_token = tokenizer.eos_token  # pyrefly: ignore [missing-attribute]
 
-    bos_token = tokenizer.bos_token if tokenizer.bos_token else eos_token
+    bos_token = tokenizer.bos_token if tokenizer.bos_token else eos_token  # pyrefly: ignore [missing-attribute]
 
     def gen():
         while True:
@@ -195,7 +195,7 @@ def hf_mixed_dataset_to_generator(
                     while length < min_chars:
                         sample = next(chat_ds)[chat_key]
                         # Apply chat template also includes bos token
-                        sample = tokenizer.apply_chat_template(sample, tokenize=False)
+                        sample = tokenizer.apply_chat_template(sample, tokenize=False)  # pyrefly: ignore [missing-attribute]
                         sample = randomly_remove_system_prompt(
                             sample, system_prompt_removal_freq, system_prompt_to_remove
                         )
@@ -204,7 +204,7 @@ def hf_mixed_dataset_to_generator(
                     samples = "".join(samples)
                     yield samples
                 else:
-                    sample = tokenizer.apply_chat_template(
+                    sample = tokenizer.apply_chat_template(  # pyrefly: ignore [missing-attribute]
                         next(chat_ds)[chat_key], tokenize=False
                     )
                     sample = randomly_remove_system_prompt(
@@ -232,9 +232,9 @@ def hf_sequence_packing_dataset_to_generator(
     # Load both datasets as iterable streams
     pretrain_ds = iter(load_dataset(pretrain_dataset, split=split, streaming=streaming))
 
-    eos_token = tokenizer.eos_token
+    eos_token = tokenizer.eos_token  # pyrefly: ignore [missing-attribute]
 
-    bos_token = tokenizer.bos_token if tokenizer.bos_token else eos_token
+    bos_token = tokenizer.bos_token if tokenizer.bos_token else eos_token  # pyrefly: ignore [missing-attribute]
 
     def gen():
         while True:

@@ -67,6 +67,9 @@ class ThresholdingAutoEncoderTopK(Dictionary, nn.Module):
     Selection: top-k based on |acts|, preserving signs
     """
 
+    k: t.Tensor
+    threshold: t.Tensor
+
     def __init__(self, activation_dim: int, dict_size: int, k: int):
         super().__init__()
         self.activation_dim = activation_dim
@@ -78,11 +81,14 @@ class ThresholdingAutoEncoderTopK(Dictionary, nn.Module):
 
         self.decoder = nn.Linear(dict_size, activation_dim, bias=False)
         self.decoder.weight.data = set_decoder_norm_to_unit_norm(
-            self.decoder.weight, activation_dim, dict_size
+            self.decoder.weight,  # pyrefly: ignore[bad-argument-type]
+            activation_dim,
+            dict_size,  # pyrefly: ignore [bad-argument-type]
         )
 
         self.b_dec = nn.Parameter(t.zeros(activation_dim))
 
+    # pyrefly: ignore[bad-override]
     def encode(
         self,
         x: Float[t.Tensor, "n_tokens activation_dim"],
@@ -108,7 +114,7 @@ class ThresholdingAutoEncoderTopK(Dictionary, nn.Module):
             if return_topk:
                 # Get top-k based on absolute values
                 abs_acts_BF = t.abs(feat_acts_BF)
-                post_topk = abs_acts_BF.topk(self.k, sorted=False, dim=-1)
+                post_topk = abs_acts_BF.topk(self.k, sorted=False, dim=-1)  # pyrefly: ignore [bad-argument-type]
                 top_indices_BK = post_topk.indices
                 # Get the actual values (with signs) at the top-k indices
                 top_acts_BK = feat_acts_BF.gather(-1, top_indices_BK)
@@ -123,7 +129,7 @@ class ThresholdingAutoEncoderTopK(Dictionary, nn.Module):
 
         # Get top-k based on absolute values
         abs_acts_BF = t.abs(feat_acts_BF)
-        post_topk = abs_acts_BF.topk(self.k, sorted=False, dim=-1)
+        post_topk = abs_acts_BF.topk(self.k, sorted=False, dim=-1)  # pyrefly: ignore [bad-argument-type]
         top_indices_BK = post_topk.indices
 
         # Get the actual values (with signs) at the top-k indices
@@ -139,10 +145,10 @@ class ThresholdingAutoEncoderTopK(Dictionary, nn.Module):
         else:
             return encoded_acts_BF
 
-    def decode(
-        self, x: Float[t.Tensor, "n_tokens dict_size"]
+    def decode(  # pyrefly: ignore [bad-override]
+        self, f: Float[t.Tensor, "n_tokens dict_size"]
     ) -> Float[t.Tensor, "n_tokens activation_dim"]:
-        return self.decoder(x) + self.b_dec
+        return self.decoder(f) + self.b_dec
 
     def forward(
         self,
@@ -156,19 +162,20 @@ class ThresholdingAutoEncoderTopK(Dictionary, nn.Module):
         ],
     ]:
         encoded_acts_BF = self.encode(x)
-        x_hat_BD = self.decode(encoded_acts_BF)
+        x_hat_BD = self.decode(encoded_acts_BF)  # pyrefly: ignore [bad-argument-type]
         if not output_features:
             return x_hat_BD
         else:
-            return x_hat_BD, encoded_acts_BF
+            return x_hat_BD, encoded_acts_BF  # pyrefly: ignore [bad-return]
 
     def scale_biases(self, scale: float) -> None:
         self.b_dec.data *= scale
         if self.threshold >= 0:
             self.threshold *= scale
 
+    # pyrefly: ignore[bad-override]
     @classmethod
-    def from_pretrained(
+    def from_pretrained(  # pyrefly: ignore [bad-override]
         cls, path: str, k: Optional[int] = None, device: Optional[str] = None
     ) -> "ThresholdingAutoEncoderTopK":
         """
@@ -233,6 +240,7 @@ class NestedThresholdingAutoEncoderTopK(ThresholdingAutoEncoderTopK):
         # Store k_values as buffer for device handling
         self.register_buffer("k_tensor", t.tensor(self.k_values, dtype=t.int))
 
+    # pyrefly: ignore[bad-override]
     def encode(
         self, x: Float[t.Tensor, "n_tokens activation_dim"]
     ) -> Float[t.Tensor, "n_tokens dict_size"]:
@@ -318,8 +326,9 @@ class NestedThresholdingAutoEncoderTopK(ThresholdingAutoEncoderTopK):
     def scale_biases(self, scale: float) -> None:
         self.b_dec.data *= scale
 
+    # pyrefly: ignore[bad-override]
     @classmethod
-    def from_pretrained(
+    def from_pretrained(  # pyrefly: ignore [bad-param-name-override]
         cls,
         path: str,
         k_values: Optional[list[int]] = None,
@@ -533,13 +542,13 @@ class ThresholdingTopKTrainer(SAETrainer):
         x: Float[t.Tensor, "n_tokens activation_dim"],
         step: Optional[int] = None,
         logging: bool = False,
-    ) -> Union[Float[t.Tensor, ""], namedtuple]:
+    ) -> Union[Float[t.Tensor, ""], namedtuple]:  # pyrefly: ignore [not-a-type]
         # Run the SAE
         f, top_acts_BK, top_indices_BK, feat_acts_BF = self.ae.encode(
             x, return_topk=True, use_threshold=False
         )
 
-        if step > self.threshold_start_step:
+        if step > self.threshold_start_step:  # pyrefly: ignore [unsupported-operation]
             self.update_threshold(top_acts_BK)
 
         x_hat = self.ae.decode(f)
@@ -575,21 +584,24 @@ class ThresholdingTopKTrainer(SAETrainer):
                 f,
                 {
                     "l2_loss": l2_loss.item(),
-                    "auxk_loss": auxk_loss.item(),
+                    "auxk_loss": auxk_loss.item(),  # pyrefly: ignore [missing-attribute]
                     "loss": loss.item(),
                 },
             )
 
-    def update(self, step: int, x: Float[t.Tensor, "n_tokens activation_dim"]) -> float:
+    def update(  # pyrefly: ignore[bad-override]
+        self, step: int, activations: Float[t.Tensor, "n_tokens activation_dim"]
+    ) -> float:
         # Initialise the decoder bias
         if step == 0:
-            median = geometric_median(x)
+            median = geometric_median(activations)
             median = median.to(self.ae.b_dec.dtype)
             self.ae.b_dec.data = median
 
         # compute the loss
-        x = x.to(self.device)
-        loss = self.loss(x, step=step)
+        activations = activations.to(self.device)
+        loss = self.loss(activations, step=step)
+        assert isinstance(loss, t.Tensor)
         loss.backward()
 
         # clip grad norm and remove grads parallel to decoder directions
@@ -613,8 +625,9 @@ class ThresholdingTopKTrainer(SAETrainer):
 
         return loss.item()
 
+    # pyrefly: ignore[bad-override]
     @property
-    def config(self):
+    def config(self):  # pyrefly: ignore [bad-override]
         return {
             "trainer_class": "ThresholdingTopKTrainer",
             "dict_class": "ThresholdingAutoEncoderTopK",
@@ -722,7 +735,7 @@ class NestedThresholdingTopKTrainer(ThresholdingTopKTrainer):
         x: Float[t.Tensor, "n_tokens activation_dim"],
         step: Optional[int] = None,
         logging: bool = False,
-    ) -> Union[Float[t.Tensor, ""], namedtuple]:
+    ) -> Union[Float[t.Tensor, ""], namedtuple]:  # pyrefly: ignore [not-a-type]
         """Compute nested loss for all k values."""
         # Get nested encodings and initial activations
         nested_encodings, feat_acts_BF = self.ae.encode_with_info(x)
@@ -730,6 +743,7 @@ class NestedThresholdingTopKTrainer(ThresholdingTopKTrainer):
         # Compute loss for each k value
         total_loss = 0.0
         l2_losses = {}
+        auxk_loss: t.Tensor | int = 0
 
         for i, k in enumerate(self.k_values):
             f_k = nested_encodings[k]
@@ -781,10 +795,11 @@ class NestedThresholdingTopKTrainer(ThresholdingTopKTrainer):
                         if isinstance(auxk_loss, t.Tensor)
                         else auxk_loss
                     ),
-                    "loss": loss.item(),
+                    "loss": loss.item(),  # pyrefly: ignore [missing-attribute]
                 },
             )
 
+    # pyrefly: ignore[bad-override]
     @property
     def config(self):
         return {

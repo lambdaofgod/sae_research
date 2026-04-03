@@ -51,7 +51,7 @@ class DictionaryLearningSAEWrapper(base_sae.BaseSAE):
         d_sae = autoencoder.dict_size
         hook_name = f"blocks.{hook_layer}.hook_resid_post"
 
-        super().__init__(d_in, d_sae, model_name, hook_layer, device, dtype, hook_name)
+        super().__init__(d_in, d_sae, model_name, hook_layer, device, dtype, hook_name)  # pyrefly: ignore [bad-argument-type]
 
         self.autoencoder = autoencoder
 
@@ -62,17 +62,17 @@ class DictionaryLearningSAEWrapper(base_sae.BaseSAE):
         # sae_bench expects:
         #   W_enc shape: (d_in, d_sae)
         #   W_dec shape: (d_sae, d_in)
-        self.W_enc = nn.Parameter(autoencoder.encoder.weight.T.detach())
-        self.W_dec = nn.Parameter(autoencoder.decoder.weight.T.detach())
+        self.W_enc = nn.Parameter(autoencoder.encoder.weight.T.detach())  # pyrefly: ignore [missing-attribute]
+        self.W_dec = nn.Parameter(autoencoder.decoder.weight.T.detach())  # pyrefly: ignore [missing-attribute]
 
         if (
             hasattr(autoencoder.encoder, "bias")
             and autoencoder.encoder.bias is not None
         ):
-            self.b_enc = nn.Parameter(autoencoder.encoder.bias.detach())
+            self.b_enc = nn.Parameter(autoencoder.encoder.bias.detach())  # pyrefly: ignore [not-callable]
 
         if hasattr(autoencoder, "b_dec"):
-            self.b_dec = nn.Parameter(autoencoder.b_dec.detach())
+            self.b_dec = nn.Parameter(autoencoder.b_dec.detach())  # pyrefly: ignore [not-callable]
 
         # Set architecture name from trainer class
         trainer_class = config_dict.get("trainer", {}).get("trainer_class", "")
@@ -82,10 +82,10 @@ class DictionaryLearningSAEWrapper(base_sae.BaseSAE):
         self.cfg.training_tokens = training_tokens
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
-        return self.autoencoder.encode(x)
+        return self.autoencoder.encode(x)  # pyrefly: ignore [not-callable]
 
     def decode(self, feature_acts: torch.Tensor) -> torch.Tensor:
-        return self.autoencoder.decode(feature_acts)
+        return self.autoencoder.decode(feature_acts)  # pyrefly: ignore [not-callable]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.decode(self.encode(x))

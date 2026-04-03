@@ -79,8 +79,8 @@ def main():
 
     from datasets import config as ds_config
 
-    ds_config.STREAMING_READ_MAX_RETRIES = 100
-    ds_config.STREAMING_READ_RETRY_INTERVAL = 20
+    ds_config.STREAMING_READ_MAX_RETRIES = 100  # pyrefly: ignore [bad-assignment]
+    ds_config.STREAMING_READ_RETRY_INTERVAL = 20  # pyrefly: ignore [bad-assignment]
 
     from sae_research.training.cli_runner import run_sae_training, eval_saes
     from sae_research.training import utils

@@ -70,9 +70,9 @@ class GroupedSAEFeatures(SAEFeatures, BaseModel):
 
     @model_validator(mode="after")
     def validate_cluster_labels_match_features(self):
-        if len(self.cluster_labels) != self.n_features:
+        if len(self.group_labels) != self.n_features:
             raise ValueError(
-                f"Number of cluster labels ({len(self.cluster_labels)}) does not match "
+                f"Number of cluster labels ({len(self.group_labels)}) does not match "
                 f"number of features ({self.n_features})"
             )
         return self

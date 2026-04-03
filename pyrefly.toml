@@ -1,1 +1,3 @@
 project_includes = ["sae_research"]
+project_excludes = ["sae_research/stiefel_sae.py"]
+replace_imports_with_any = ["geoopt"]

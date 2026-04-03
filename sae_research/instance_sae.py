@@ -25,9 +25,10 @@ class InstanceSparseCodingSAE:
     instance_support_selector: nn.Module
     instance_lstsq: nn.Module
     thresholding: nn.Module
-    W_dec: torch.Tensor
-    b_dec: torch.Tensor
-    b_enc: torch.Tensor
+    k: torch.Tensor
+    W_dec: nn.Parameter
+    b_dec: nn.Parameter
+    b_enc: nn.Parameter
 
     def encode(self, x: torch.Tensor):
         """
@@ -86,12 +87,12 @@ class InstanceHardThresholdingPursuitSAE(InstanceSparseCodingSAE, base_sae.BaseS
         k: int,
         model_name: str,
         hook_layer: int,
-        device: torch.device,
+        device: str | torch.device,
         dtype: torch.dtype,
         hook_name: str | None = None,
     ):
         hook_name = hook_name or f"blocks.{hook_layer}.hook_resid_post"
-        super().__init__(d_in, d_sae, model_name, hook_layer, device, dtype, hook_name)
+        super().__init__(d_in, d_sae, model_name, hook_layer, device, dtype, hook_name)  # pyrefly: ignore [bad-argument-type]
 
         assert isinstance(k, int) and k > 0
         self.register_buffer("k", torch.tensor(k, dtype=torch.int, device=device))
@@ -110,6 +111,8 @@ class MPSAE(InstanceSparseCodingSAE, base_sae.BaseSAE):
     based on maximum correlation with the residual, for S steps.
     """
 
+    S: torch.Tensor
+
     def __init__(
         self,
         d_in: int,
@@ -117,12 +120,12 @@ class MPSAE(InstanceSparseCodingSAE, base_sae.BaseSAE):
         s: int,  # number of matching pursuit steps
         model_name: str,
         hook_layer: int,
-        device: torch.device,
+        device: str | torch.device,
         dtype: torch.dtype,
         hook_name: str | None = None,
     ):
         hook_name = hook_name or f"blocks.{hook_layer}.hook_resid_post"
-        super().__init__(d_in, d_sae, model_name, hook_layer, device, dtype, hook_name)
+        super().__init__(d_in, d_sae, model_name, hook_layer, device, dtype, hook_name)  # pyrefly: ignore [bad-argument-type]
 
         assert isinstance(s, int) and s > 0
         self.register_buffer("S", torch.tensor(s, dtype=torch.int, device=device))
@@ -148,7 +151,7 @@ class MPSAE(InstanceSparseCodingSAE, base_sae.BaseSAE):
         )
 
         # Matching pursuit iterations
-        for t in range(self.S.item()):
+        for t in range(self.S.item()):  # pyrefly: ignore [bad-argument-type]
             # Compute correlations: r @ W_dec^T
             correlations = r @ self.W_dec.T  # (batch, seq_len, d_sae)
 
@@ -182,9 +185,9 @@ def load_from_sae_lens(
     model_name: str,
     release: str,
     sae_id: str,
-    k: int = None,
-    s: int = None,
-    hook_layer: int = None,
+    k: int | None = None,
+    s: int | None = None,
+    hook_layer: int | None = None,
     sae_cls=InstanceHardThresholdingPursuitSAE,
     device: str = "cuda",
 ):
@@ -195,15 +198,22 @@ def load_from_sae_lens(
         sae_id=sae_id,
         device=device,
     )
-    d_in = sae_lens_sae.W_dec.shape[1]
-    d_sae = sae_lens_sae.W_dec.shape[0]
+    d_in = sae_lens_sae.W_dec.shape[1]  # pyrefly: ignore [missing-attribute]
+    d_sae = sae_lens_sae.W_dec.shape[0]  # pyrefly: ignore [missing-attribute]
 
     # Determine which parameter to use based on the SAE class
+    assert hook_layer is not None, "hook_layer must be specified"
     if sae_cls == MPSAE:
         if s is None:
             raise ValueError("Parameter 's' (number of MP steps) is required for MPSAE")
         sae = sae_cls(
-            d_in, d_sae, s, model_name, hook_layer, device, sae_lens_sae.W_dec.dtype
+            d_in,
+            d_sae,
+            s,
+            model_name,
+            hook_layer,
+            device,
+            sae_lens_sae.W_dec.dtype,  # pyrefly: ignore [bad-argument-type, missing-attribute]
         )
     else:
         if k is None:
@@ -211,12 +221,18 @@ def load_from_sae_lens(
                 "Parameter 'k' is required for InstanceHardThresholdingPursuitSAE"
             )
         sae = sae_cls(
-            d_in, d_sae, k, model_name, hook_layer, device, sae_lens_sae.W_dec.dtype
+            d_in,
+            d_sae,
+            k,
+            model_name,
+            hook_layer,
+            device,
+            sae_lens_sae.W_dec.dtype,  # pyrefly: ignore [bad-argument-type, missing-attribute]
         )
 
-    sae.W_dec.data = sae_lens_sae.W_dec.to(device)
-    sae.b_dec.data = sae_lens_sae.b_dec.to(device)
-    sae.b_enc.data = sae_lens_sae.b_enc.to(device)
+    sae.W_dec.data = sae_lens_sae.W_dec.to(device)  # pyrefly: ignore [missing-attribute]
+    sae.b_dec.data = sae_lens_sae.b_dec.to(device)  # pyrefly: ignore [missing-attribute]
+    sae.b_enc.data = sae_lens_sae.b_enc.to(device)  # pyrefly: ignore [missing-attribute]
     return sae
 
 
@@ -224,7 +240,7 @@ def load_dictionary_learning_instance_sae(
     repo_id: str,
     filename: str,
     model_name: str,
-    device: torch.device,
+    device: str | torch.device,
     dtype: torch.dtype,
     layer: int | None = None,
     local_dir: str = "downloaded_saes",
@@ -346,7 +362,7 @@ def load_dictionary_learning_instance_sae(
     )
 
     # Check decoder normalization
-    normalized = sae.check_decoder_norms()
+    normalized = sae.check_decoder_norms()  # pyrefly: ignore [missing-argument]
     if not normalized:
         raise ValueError("Decoder vectors are not normalized. Please normalize them")
 

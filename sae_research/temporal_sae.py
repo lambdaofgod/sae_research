@@ -24,6 +24,10 @@ from dictionary_learning.trainers.trainer import (
 
 
 class TemporalMatryoshkaBatchTopKSAE(Dictionary, nn.Module):
+    k: t.Tensor
+    threshold: t.Tensor
+    group_sizes: t.Tensor
+
     def __init__(
         self,
         activation_dim: int,
@@ -58,11 +62,14 @@ class TemporalMatryoshkaBatchTopKSAE(Dictionary, nn.Module):
 
         # We must transpose because we are using nn.Parameter, not nn.Linear
         self.W_dec.data = set_decoder_norm_to_unit_norm(
-            self.W_dec.data.T, activation_dim, dict_size
+            self.W_dec.data.T,  # pyrefly: ignore[bad-argument-type]
+            activation_dim,
+            dict_size,  # pyrefly: ignore [bad-argument-type]
         ).T
         self.W_enc.data = self.W_dec.data.clone().T
         self.temporal = temporal
 
+    # pyrefly: ignore[bad-override]
     def encode(
         self, x: t.Tensor, return_active: bool = False, use_threshold: bool = True
     ):
@@ -78,7 +85,7 @@ class TemporalMatryoshkaBatchTopKSAE(Dictionary, nn.Module):
         else:
             # Flatten and perform batch top-k
             flattened_acts = post_relu_feat_acts_BF.flatten()
-            post_topk = flattened_acts.topk(self.k * x.size(0), sorted=False, dim=-1)
+            post_topk = flattened_acts.topk(self.k * x.size(0), sorted=False, dim=-1)  # pyrefly: ignore [bad-argument-type]
             encoded_acts_BF = (
                 t.zeros_like(post_relu_feat_acts_BF.flatten())
                 .scatter_(-1, post_topk.indices, post_topk.values)
@@ -93,12 +100,12 @@ class TemporalMatryoshkaBatchTopKSAE(Dictionary, nn.Module):
         else:
             return encoded_acts_BF
 
-    def decode(self, x: t.Tensor) -> t.Tensor:
-        return x @ self.W_dec + self.b_dec
+    def decode(self, f: t.Tensor) -> t.Tensor:  # pyrefly: ignore [bad-override]
+        return f @ self.W_dec + self.b_dec
 
     def forward(self, x: t.Tensor, output_features: bool = False):
         encoded_acts_BF = self.encode(x)
-        x_hat_BD = self.decode(encoded_acts_BF)
+        x_hat_BD = self.decode(encoded_acts_BF)  # pyrefly: ignore [bad-argument-type]
 
         if not output_features:
             return x_hat_BD
@@ -113,6 +120,7 @@ class TemporalMatryoshkaBatchTopKSAE(Dictionary, nn.Module):
             self.threshold *= scale
 
     @classmethod
+    # pyrefly: ignore[bad-override]
     def from_pretrained(
         cls, path, k=None, temporal=False, device=None, **kwargs
     ) -> "TemporalMatryoshkaBatchTopKSAE":
@@ -308,9 +316,9 @@ class TemporalMatryoshkaBatchTopKTrainer(SAETrainer):
             )
             x_reconstruct = t.zeros_like(x[:, 0]) + self.ae.b_dec
         else:
-            print("ERROR: must be temporal")
+            raise ValueError("must be temporal")
 
-        if step > self.threshold_start_step:
+        if step > self.threshold_start_step:  # pyrefly: ignore [unsupported-operation]
             self.update_threshold(f)
 
         total_l2_loss = 0.0
@@ -412,16 +420,17 @@ class TemporalMatryoshkaBatchTopKTrainer(SAETrainer):
                 },
             )
 
-    def update(self, step, x):
+    def update(self, step, activations):  # pyrefly: ignore [bad-override]
         if step == 0:
             if self.temporal:
-                median = self.geometric_median(x[:, 0])
+                median = self.geometric_median(activations[:, 0])
             else:
-                median = self.geometric_median(x)
+                median = self.geometric_median(activations)
             self.ae.b_dec.data = median
 
-        x = x.to(self.device)
-        loss = self.loss(x, step=step)
+        activations = activations.to(self.device)
+        loss = self.loss(activations, step=step)
+        assert isinstance(loss, t.Tensor)
         loss.backward()
 
         # We must transpose because we are using nn.Parameter, not nn.Linear
@@ -438,12 +447,13 @@ class TemporalMatryoshkaBatchTopKTrainer(SAETrainer):
         self.scheduler.step()
 
         # We must transpose because we are using nn.Parameter, not nn.Linear
-        self.ae.W_dec.data = set_decoder_norm_to_unit_norm(
+        self.ae.W_dec.data = set_decoder_norm_to_unit_norm(  # pyrefly: ignore[bad-argument-type]
             self.ae.W_dec.T, self.ae.activation_dim, self.ae.dict_size
         ).T
 
         return loss.item()
 
+    # pyrefly: ignore[bad-override]
     @property
     def config(self):
         return {
@@ -497,6 +507,9 @@ class TemporalBatchTopKSAE(Dictionary, nn.Module):
     Copied as-is from the fork for completeness.
     """
 
+    k: t.Tensor
+    threshold: t.Tensor
+
     def __init__(self, activation_dim: int, dict_size: int, k: int, temporal: bool):
         super().__init__()
         self.activation_dim = activation_dim
@@ -508,7 +521,9 @@ class TemporalBatchTopKSAE(Dictionary, nn.Module):
 
         self.decoder = nn.Linear(dict_size, activation_dim, bias=False)
         self.decoder.weight.data = set_decoder_norm_to_unit_norm(
-            self.decoder.weight, activation_dim, dict_size
+            self.decoder.weight,  # pyrefly: ignore[bad-argument-type]
+            activation_dim,
+            dict_size,  # pyrefly: ignore [bad-argument-type]
         )
 
         self.encoder = nn.Linear(activation_dim, dict_size)
@@ -517,6 +532,7 @@ class TemporalBatchTopKSAE(Dictionary, nn.Module):
         self.b_dec = nn.Parameter(t.zeros(activation_dim))
         self.temporal = temporal
 
+    # pyrefly: ignore[bad-override]
     def encode(
         self, x: t.Tensor, return_active: bool = False, use_threshold: bool = True
     ):
@@ -530,7 +546,7 @@ class TemporalBatchTopKSAE(Dictionary, nn.Module):
             )
         else:
             flattened_acts = post_relu_feat_acts_BF.flatten()
-            post_topk = flattened_acts.topk(self.k * x.size(0), sorted=False, dim=-1)
+            post_topk = flattened_acts.topk(self.k * x.size(0), sorted=False, dim=-1)  # pyrefly: ignore [bad-argument-type]
 
             encoded_acts_BF = (
                 t.zeros_like(post_relu_feat_acts_BF.flatten())
@@ -543,12 +559,12 @@ class TemporalBatchTopKSAE(Dictionary, nn.Module):
         else:
             return encoded_acts_BF
 
-    def decode(self, x: t.Tensor) -> t.Tensor:
-        return self.decoder(x) + self.b_dec
+    def decode(self, f: t.Tensor) -> t.Tensor:  # pyrefly: ignore [bad-override]
+        return self.decoder(f) + self.b_dec
 
     def forward(self, x: t.Tensor, output_features: bool = False):
         encoded_acts_BF = self.encode(x)
-        x_hat_BD = self.decode(encoded_acts_BF)
+        x_hat_BD = self.decode(encoded_acts_BF)  # pyrefly: ignore [bad-argument-type]
 
         if not output_features:
             return x_hat_BD
@@ -562,6 +578,7 @@ class TemporalBatchTopKSAE(Dictionary, nn.Module):
             self.threshold *= scale
 
     @classmethod
+    # pyrefly: ignore[bad-override]
     def from_pretrained(
         cls, path, k=None, temporal=False, device=None, **kwargs
     ) -> "TemporalBatchTopKSAE":
@@ -681,7 +698,7 @@ class TemporalBatchTopKTrainer(SAETrainer):
 
             auxk_latents = t.where(dead_features[None], post_relu_acts_BF, -t.inf)
 
-            auxk_acts, auxk_indices = auxk_latents.topk(k_aux, sorted=False)
+            auxk_acts, auxk_indices = auxk_latents.topk(k_aux, sorted=False)  # pyrefly: ignore [bad-argument-type]
 
             auxk_buffer_BF = t.zeros_like(post_relu_acts_BF)
             auxk_acts_BF = auxk_buffer_BF.scatter_(
@@ -744,7 +761,7 @@ class TemporalBatchTopKTrainer(SAETrainer):
                 x, return_active=True, use_threshold=False
             )
 
-        if step > self.threshold_start_step:
+        if step > self.threshold_start_step:  # pyrefly: ignore [unsupported-operation]
             self.update_threshold(f)
 
         x_hat = self.ae.decode(f)
@@ -779,17 +796,18 @@ class TemporalBatchTopKTrainer(SAETrainer):
                 },
             )
 
-    def update(self, step, x):
+    def update(self, step, activations):  # pyrefly: ignore [bad-override]
         if step == 0:
             if self.temporal:
-                median = self.geometric_median(x[:, 0])
+                median = self.geometric_median(activations[:, 0])
             else:
-                median = self.geometric_median(x)
+                median = self.geometric_median(activations)
             median = median.to(self.ae.b_dec.dtype)
             self.ae.b_dec.data = median
 
-        x = x.to(self.device)
-        loss = self.loss(x, step=step)
+        activations = activations.to(self.device)
+        loss = self.loss(activations, step=step)
+        assert isinstance(loss, t.Tensor)
         loss.backward()
 
         self.ae.decoder.weight.grad = remove_gradient_parallel_to_decoder_directions(
@@ -804,14 +822,15 @@ class TemporalBatchTopKTrainer(SAETrainer):
         self.optimizer.zero_grad()
         self.scheduler.step()
 
-        self.ae.decoder.weight.data = set_decoder_norm_to_unit_norm(
+        self.ae.decoder.weight.data = set_decoder_norm_to_unit_norm(  # pyrefly: ignore[bad-argument-type]
             self.ae.decoder.weight, self.ae.activation_dim, self.ae.dict_size
         )
 
         return loss.item()
 
+    # pyrefly: ignore[bad-override]
     @property
-    def config(self):
+    def config(self):  # pyrefly: ignore [bad-override]
         return {
             "trainer_class": "TemporalBatchTopKTrainer",
             "dict_class": "TemporalBatchTopKSAE",

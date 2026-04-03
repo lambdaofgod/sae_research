@@ -69,6 +69,8 @@ class MatchingPursuitAutoEncoder(Dictionary, nn.Module):
     Selection: Feature with max absolute correlation at each step
     """
 
+    S: t.Tensor
+
     def __init__(self, activation_dim: int, dict_size: int, s: int):
         super().__init__()
         self.activation_dim = activation_dim
@@ -79,11 +81,14 @@ class MatchingPursuitAutoEncoder(Dictionary, nn.Module):
 
         self.decoder = nn.Linear(dict_size, activation_dim, bias=False)
         self.decoder.weight.data = set_decoder_norm_to_unit_norm(
-            self.decoder.weight, activation_dim, dict_size
+            self.decoder.weight,  # pyrefly: ignore[bad-argument-type]
+            activation_dim,
+            dict_size,  # pyrefly: ignore [bad-argument-type]
         )
 
         self.b_dec = nn.Parameter(t.zeros(activation_dim))
 
+    # pyrefly: ignore[bad-override]
     def encode(
         self, x: Float[t.Tensor, "n_tokens activation_dim"], return_info: bool = False
     ) -> (
@@ -116,7 +121,7 @@ class MatchingPursuitAutoEncoder(Dictionary, nn.Module):
         )
 
         # Track selected indices for each batch element at each step
-        selected_indices = t.zeros(
+        selected_indices = t.zeros(  # pyrefly: ignore [no-matching-overload]
             batch_size, self.S.item(), device=x.device, dtype=t.long
         )
 
@@ -125,7 +130,7 @@ class MatchingPursuitAutoEncoder(Dictionary, nn.Module):
 
         with t.no_grad():
             # Matching pursuit iterations
-            for step in range(self.S.item()):
+            for step in range(self.S.item()):  # pyrefly: ignore [bad-argument-type]
                 # Compute correlations: r @ W_decoder
                 # Note: decoder.weight is stored as (activation_dim, dict_size) in nn.Linear
                 correlations = r @ self.decoder.weight  # (batch, dict_size)
@@ -155,11 +160,11 @@ class MatchingPursuitAutoEncoder(Dictionary, nn.Module):
         else:
             return z
 
-    def decode(
-        self, x: Float[t.Tensor, "n_tokens dict_size"]
+    def decode(  # pyrefly: ignore [bad-override]
+        self, f: Float[t.Tensor, "n_tokens dict_size"]
     ) -> Float[t.Tensor, "n_tokens activation_dim"]:
         """Standard linear decode."""
-        return self.decoder(x) + self.b_dec
+        return self.decoder(f) + self.b_dec
 
     def forward(
         self,
@@ -173,18 +178,19 @@ class MatchingPursuitAutoEncoder(Dictionary, nn.Module):
         ]
     ):
         encoded_acts = self.encode(x)
-        x_hat = self.decode(encoded_acts)
+        x_hat = self.decode(encoded_acts)  # pyrefly: ignore [bad-argument-type]
         if not output_features:
             return x_hat
         else:
-            return x_hat, encoded_acts
+            return x_hat, encoded_acts  # pyrefly: ignore [bad-return]
 
     def scale_biases(self, scale: float):
         """Scale the decoder bias."""
         self.b_dec.data *= scale
 
+    # pyrefly: ignore[bad-override]
     @classmethod
-    def from_pretrained(cls, path, s: Optional[int] = None, device=None):
+    def from_pretrained(cls, path, s: Optional[int] = None, device=None):  # pyrefly: ignore [bad-override]
         """
         Load a pretrained autoencoder from a file.
         """
@@ -240,11 +246,14 @@ class NestedMatchingPursuitAutoEncoder(Dictionary, nn.Module):
 
         self.decoder = nn.Linear(dict_size, activation_dim, bias=False)
         self.decoder.weight.data = set_decoder_norm_to_unit_norm(
-            self.decoder.weight, activation_dim, dict_size
+            self.decoder.weight,  # pyrefly: ignore[bad-argument-type]
+            activation_dim,
+            dict_size,  # pyrefly: ignore [bad-argument-type]
         )
 
         self.b_dec = nn.Parameter(t.zeros(activation_dim))
 
+    # pyrefly: ignore[bad-override]
     def encode(
         self, x: Float[t.Tensor, "n_tokens activation_dim"]
     ) -> Float[t.Tensor, "n_tokens dict_size"]:
@@ -431,11 +440,11 @@ class NestedMatchingPursuitAutoEncoder(Dictionary, nn.Module):
 
         return nested_codes, selected_indices, selected_coeffs, initial_acts
 
-    def decode(
-        self, x: Float[t.Tensor, "n_tokens dict_size"]
+    def decode(  # pyrefly: ignore [bad-override]
+        self, f: Float[t.Tensor, "n_tokens dict_size"]
     ) -> Float[t.Tensor, "n_tokens activation_dim"]:
         """Standard linear decode."""
-        return self.decoder(x) + self.b_dec
+        return self.decoder(f) + self.b_dec
 
     def forward(
         self,
@@ -460,8 +469,9 @@ class NestedMatchingPursuitAutoEncoder(Dictionary, nn.Module):
         """Scale the decoder bias."""
         self.b_dec.data *= scale
 
+    # pyrefly: ignore[bad-override]
     @classmethod
-    def from_pretrained(cls, path, s_values: Optional[list[int]] = None, device=None):
+    def from_pretrained(cls, path, s_values: Optional[list[int]] = None, device=None):  # pyrefly: ignore [bad-override]
         """
         Load a pretrained nested autoencoder from a file.
         """
@@ -561,7 +571,7 @@ class MatchingPursuitTrainer(SAETrainer):
             "dead_features",
             "pre_norm_auxk_loss",
         ]
-        self.effective_l0 = -1
+        self.effective_l0: float = -1
         self.dead_features = -1
         self.pre_norm_auxk_loss = -1
 
@@ -684,7 +694,7 @@ class MatchingPursuitTrainer(SAETrainer):
         if not logging:
             return loss
         else:
-            return namedtuple("LossLog", ["x", "x_hat", "f", "losses"])(
+            return namedtuple("LossLog", ["x", "x_hat", "f", "losses"])(  # pyrefly: ignore [bad-return]
                 x,
                 x_hat,
                 f,
@@ -699,17 +709,20 @@ class MatchingPursuitTrainer(SAETrainer):
                 },
             )
 
-    def update(self, step: int, x: Float[t.Tensor, "n_tokens activation_dim"]) -> float:
+    def update(  # pyrefly: ignore[bad-override]
+        self, step: int, activations: Float[t.Tensor, "n_tokens activation_dim"]
+    ) -> float:
         """Perform a training update step."""
         # Initialize the decoder bias
         if step == 0:
-            median = geometric_median(x)
+            median = geometric_median(activations)
             median = median.to(self.ae.b_dec.dtype)
             self.ae.b_dec.data = median
 
         # Compute the loss
-        x = x.to(self.device)
-        loss = self.loss(x, step=step)
+        activations = activations.to(self.device)
+        loss = self.loss(activations, step=step)
+        assert isinstance(loss, t.Tensor)
         loss.backward()
 
         # Clip grad norm and remove grads parallel to decoder directions
@@ -734,8 +747,9 @@ class MatchingPursuitTrainer(SAETrainer):
 
         return loss.item()
 
+    # pyrefly: ignore[bad-override]
     @property
-    def config(self):
+    def config(self):  # pyrefly: ignore [bad-override]
         return {
             "trainer_class": "MatchingPursuitTrainer",
             "dict_class": "MatchingPursuitAutoEncoder",
@@ -835,7 +849,7 @@ class NestedMatchingPursuitTrainer(SAETrainer):
             "dead_features",
             "pre_norm_auxk_loss",
         ]
-        self.effective_l0_per_s = {s: -1 for s in s_values}
+        self.effective_l0_per_s: dict[int, float] = {s: -1 for s in s_values}
         self.dead_features = -1
         self.pre_norm_auxk_loss = -1
 
@@ -912,6 +926,7 @@ class NestedMatchingPursuitTrainer(SAETrainer):
         # Compute loss for each S value
         total_loss = 0.0
         l2_losses = {}
+        auxk_loss: t.Tensor | int = 0
 
         for i, s in enumerate(self.s_values):
             z_s = nested_codes[s]
@@ -951,11 +966,11 @@ class NestedMatchingPursuitTrainer(SAETrainer):
         loss = total_loss + self.auxk_alpha * auxk_loss
 
         if not logging:
-            return loss
+            return loss  # pyrefly: ignore [bad-return]
         else:
             # Return info for largest S
             x_hat_max = self.ae.decode(nested_codes[self.ae.max_s])
-            return namedtuple("LossLog", ["x", "x_hat", "f", "losses"])(
+            return namedtuple("LossLog", ["x", "x_hat", "f", "losses"])(  # pyrefly: ignore [bad-return]
                 x,
                 x_hat_max,
                 nested_codes[self.ae.max_s],
@@ -966,21 +981,24 @@ class NestedMatchingPursuitTrainer(SAETrainer):
                         if isinstance(auxk_loss, t.Tensor)
                         else auxk_loss
                     ),
-                    "loss": loss.item(),
+                    "loss": loss.item(),  # pyrefly: ignore [missing-attribute]
                 },
             )
 
-    def update(self, step: int, x: Float[t.Tensor, "n_tokens activation_dim"]) -> float:
+    def update(  # pyrefly: ignore[bad-override]
+        self, step: int, activations: Float[t.Tensor, "n_tokens activation_dim"]
+    ) -> float:
         """Perform a training update step."""
         # Initialize the decoder bias
         if step == 0:
-            median = geometric_median(x)
+            median = geometric_median(activations)
             median = median.to(self.ae.b_dec.dtype)
             self.ae.b_dec.data = median
 
         # Compute the loss
-        x = x.to(self.device)
-        loss = self.loss(x, step=step)
+        activations = activations.to(self.device)
+        loss = self.loss(activations, step=step)
+        assert isinstance(loss, t.Tensor)
         loss.backward()
 
         # Clip grad norm and remove grads parallel to decoder directions
@@ -1004,8 +1022,9 @@ class NestedMatchingPursuitTrainer(SAETrainer):
 
         return loss.item()
 
+    # pyrefly: ignore[bad-override]
     @property
-    def config(self):
+    def config(self):  # pyrefly: ignore [bad-override]
         return {
             "trainer_class": "NestedMatchingPursuitTrainer",
             "dict_class": "NestedMatchingPursuitAutoEncoder",

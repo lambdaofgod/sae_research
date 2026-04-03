@@ -86,12 +86,12 @@ def run_sae_training(
     learning_rates: list[float],
     dry_run: bool = False,
     use_mlflow: bool = True,
-    mlflow_parent_run_id: str = None,
+    mlflow_parent_run_id: str | None = None,
     save_checkpoints: bool = False,
     buffer_tokens: int = 250_000,
     mixed_dataset: bool = False,
-    remove_bos: bool = None,
-    max_activation_norm_multiple: float = None,
+    remove_bos: bool | None = None,
+    max_activation_norm_multiple: float | None = None,
 ):
     if remove_bos is None:
         remove_bos = demo_config.remove_bos
@@ -228,7 +228,7 @@ def run_sae_training(
             device=device,
             add_special_tokens=False,
             remove_bos=remove_bos,
-            max_activation_norm_multiple=max_activation_norm_multiple,
+            max_activation_norm_multiple=max_activation_norm_multiple,  # pyrefly: ignore [bad-argument-type]
         )
 
     trainer_configs = demo_config.get_trainer_configs(
@@ -278,7 +278,7 @@ def eval_saes(
     device: str,
     overwrite_prev_results: bool = False,
     transcoder: bool = False,
-    mlflow_run_ids: list[str] = None,
+    mlflow_run_ids: list[str] | None = None,
 ) -> dict:
     random.seed(demo_config.random_seeds[0])
     t.manual_seed(demo_config.random_seeds[0])
@@ -369,7 +369,7 @@ def eval_saes(
             "n_inputs": n_inputs,
             "context_length": context_length,
         }
-        eval_results["hyperparameters"] = hyperparameters
+        eval_results["hyperparameters"] = hyperparameters  # pyrefly: ignore [unsupported-operation]
 
         print(eval_results)
 
@@ -412,8 +412,8 @@ if __name__ == "__main__":
 
     # Rarely I have internet issues on cloud GPUs and then the streaming read fails
     # Hopefully the outage is shorter than 100 * 20 seconds
-    config.STREAMING_READ_MAX_RETRIES = 100
-    config.STREAMING_READ_RETRY_INTERVAL = 20
+    config.STREAMING_READ_MAX_RETRIES = 100  # pyrefly: ignore [bad-assignment]
+    config.STREAMING_READ_RETRY_INTERVAL = 20  # pyrefly: ignore [bad-assignment]
 
     start_time = time.time()
 

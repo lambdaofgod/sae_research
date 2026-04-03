@@ -38,6 +38,7 @@ def log_stats(
             act = z.clone()
             if activations_split_by_head:  # x.shape: [batch, pos, n_heads, d_head]
                 act = act[..., i, :]
+            frac_variance_explained = None
             if not transcoder:
                 act, act_hat, f, losslog = trainer.loss(act, step=step, logging=True)
 
@@ -85,7 +86,7 @@ def get_norm_factor(data, steps: int) -> float:
 
     If experiencing troubles with hyperparameter transfer between models, it may be worth instead normalizing to the square root of d_model.
     https://transformer-circuits.pub/2024/april-update/index.html#training-saes"""
-    total_mean_squared_norm = 0
+    total_mean_squared_norm: float | t.Tensor = 0
     count = 0
 
     for step, act_BD in enumerate(
@@ -99,7 +100,7 @@ def get_norm_factor(data, steps: int) -> float:
         total_mean_squared_norm += mean_squared_norm
 
     average_mean_squared_norm = total_mean_squared_norm / count
-    norm_factor = t.sqrt(average_mean_squared_norm).item()
+    norm_factor = t.sqrt(average_mean_squared_norm).item()  # pyrefly: ignore [bad-argument-type]
 
     print(f"Average mean squared norm: {average_mean_squared_norm}")
     print(f"Norm factor: {norm_factor}")
@@ -195,6 +196,7 @@ def trainSAE(
     else:
         save_dirs = [None for _ in trainer_configs]
 
+    norm_factor: float = 1.0
     if normalize_activations:
         norm_factor = get_norm_factor(data, steps=100)
 
@@ -217,7 +219,11 @@ def trainSAE(
             actual_steps = step
 
             # logging
-            if (use_mlflow or verbose) and step % log_steps == 0:
+            if (
+                (use_mlflow or verbose)
+                and log_steps is not None
+                and step % log_steps == 0
+            ):
                 log_stats(
                     trainers,
                     step,

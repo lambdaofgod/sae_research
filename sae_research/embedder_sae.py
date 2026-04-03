@@ -30,6 +30,7 @@ class SAEWrapper(SentenceTransformer):
     ):
         super().__init__(modules=[*sentence_transformer, sae])
 
+    # pyrefly: ignore[bad-override]
     def save(self, path: str, **kwargs) -> None:
         """Save only the SAE module + config with teacher model name."""
         import json
@@ -41,6 +42,7 @@ class SAEWrapper(SentenceTransformer):
             json.dump({"teacher_model_name": self.teacher_model_name}, f)
 
     @classmethod
+    # pyrefly: ignore[bad-override]
     def load(cls, path: str) -> "SAEWrapper":
         """Load SAEWrapper from saved path."""
         import json
@@ -55,7 +57,9 @@ class SAEWrapper(SentenceTransformer):
 
     @property
     def sae(self) -> SparseAutoEncoder:
-        return list(self._modules.values())[-1]
+        from typing import cast
+
+        return cast(SparseAutoEncoder, list(self._modules.values())[-1])
 
     @property
     def teacher(self) -> SentenceTransformer:
@@ -65,8 +69,9 @@ class SAEWrapper(SentenceTransformer):
     @property
     def teacher_model_name(self) -> str:
         """Get the teacher model name from the first module."""
-        return list(self._modules.values())[0].auto_model.name_or_path
+        return list(self._modules.values())[0].auto_model.name_or_path  # pyrefly: ignore[missing-attribute]
 
+    # pyrefly: ignore[bad-override]
     def forward(
         self, features: dict[str, Tensor], max_active_dims: int | None = None
     ) -> dict[str, Tensor]:

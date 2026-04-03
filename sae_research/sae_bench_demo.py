@@ -122,7 +122,12 @@ trainer_colors = {
 # %%
 
 sae = relu_sae.load_dictionary_learning_relu_sae(
-    repo_id, baseline_filename, model_name, device, torch_dtype, layer=hook_layer
+    repo_id,
+    baseline_filename,
+    model_name,
+    device,  # pyrefly: ignore [bad-argument-type]
+    torch_dtype,
+    layer=hook_layer,  # pyrefly: ignore [bad-argument-type]
 )
 
 # %%
@@ -273,7 +278,7 @@ selected_saes = custom_saes + baseline_saes
 # Note: We typically run with n_eval_sparsity_variance_batches=2000, but I have reduced it here for a faster run
 
 _ = core.multiple_evals(
-    selected_saes=selected_saes,
+    selected_saes=selected_saes,  # pyrefly: ignore [bad-argument-type]
     n_eval_reconstruction_batches=200,
     n_eval_sparsity_variance_batches=200,
     eval_batch_size_prompts=32,
@@ -300,7 +305,7 @@ _ = sparse_probing.run_eval(
         llm_dtype=str_dtype,
         dataset_names=dataset_names,
     ),
-    selected_saes,
+    selected_saes,  # pyrefly: ignore [bad-argument-type]
     device,
     "eval_results/sparse_probing",
     force_rerun=False,

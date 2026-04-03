@@ -37,7 +37,7 @@ def start_sweep_run(
 
 
 def start_trainer_run(
-    parent_run_id: str,
+    parent_run_id: str | None,
     trainer_index: int,
     trainer_config: dict,
 ) -> mlflow.ActiveRun:

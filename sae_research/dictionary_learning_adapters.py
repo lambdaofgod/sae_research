@@ -169,10 +169,10 @@ def load_nested_thresholding_sae(
     Returns:
         A wrapped NestedThresholdingTopKSAE compatible with sae_bench
     """
-    path = Path(path)
+    dir_path = Path(path)
 
     # Load config
-    config_path = path / "config.json"
+    config_path = dir_path / "config.json"
     with open(config_path, "r") as f:
         config = json.load(f)
 
@@ -187,7 +187,7 @@ def load_nested_thresholding_sae(
         )
 
     # Load the SAE using from_pretrained
-    ae_path = path / "ae.pt"
+    ae_path = dir_path / "ae.pt"
     k_values = trainer_config.get("k_values", [trainer_config.get("k")])
 
     # Load the nested SAE
