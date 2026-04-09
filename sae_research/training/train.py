@@ -14,6 +14,7 @@ from dictionary_learning.dictionary import AutoEncoder
 from dictionary_learning.evaluation import evaluate
 from dictionary_learning.trainers.standard import StandardTrainer
 
+from sae_research.training.config import resolve_class
 from sae_research.training.mlflow_logging import (
     start_trainer_run,
     log_step_metrics,
@@ -144,12 +145,14 @@ def trainSAE(
     )
 
     trainers = []
-    trainer_classes = []
+    trainer_import_paths = []
     for i, config in enumerate(trainer_configs):
-        trainer_class = config["trainer"]
-        del config["trainer"]
+        config = config.copy()
+        trainer_path = config.pop("trainer")
+        trainer_class = resolve_class(trainer_path)
+        config["dict_class"] = resolve_class(config["dict_class"])
         trainers.append(trainer_class(**config))
-        trainer_classes.append(trainer_class)
+        trainer_import_paths.append(trainer_path)
 
     # Start MLflow child runs per trainer
     mlflow_run_ids = []
@@ -161,7 +164,7 @@ def trainSAE(
                 parent_run_id=mlflow_parent_run_id,
                 trainer_index=i,
                 trainer_config={
-                    "trainer": trainer_classes[i],
+                    "trainer": trainer_import_paths[i],
                     **trainer.config,
                     **run_cfg,
                 },

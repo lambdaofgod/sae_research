@@ -29,7 +29,8 @@ RUN uv pip install --system -c /tmp/constraints.txt \
     "jaxtyping>=0.2.0" \
     "zstandard>=0.22.0" \
     "datasets>=3.0.0" \
-    "huggingface-hub>=0.25.0"
+    "huggingface-hub>=0.25.0" \
+    "fire>=0.7.0"
 
 # Install sae_research package (no deps — they're all installed above)
 COPY pyproject.toml /app/pyproject.toml

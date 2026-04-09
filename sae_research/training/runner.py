@@ -88,52 +88,61 @@ def main(config: str):
     model_name = cfg["model_name"]
     architectures = cfg["architectures"]
     layers = cfg["layers"]
-    save_dir = f"{cfg['save_dir']}_{model_name}_{'_'.join(architectures)}".replace(
-        "/", "_"
-    )
 
     use_mlflow = cfg.get("mlflow", True)
-    mlflow_parent_run_id = None
-    mlflow_parent_run = None
-    if use_mlflow:
-        from sae_research.training.mlflow_logging import start_sweep_run
-
-        mlflow_parent_run = start_sweep_run(
-            experiment_name=cfg["mlflow_experiment"],
-            model_name=model_name,
-            layers=layers,
-            architectures=architectures,
-            run_cfg={
-                "num_tokens": cfg["num_tokens"],
-                "save_dir": save_dir,
-            },
-        )
-        mlflow_parent_run_id = mlflow_parent_run.info.run_id
 
     all_mlflow_run_ids = []
-    for layer in layers:
-        mlflow_run_ids = run_sae_training(
-            model_name=model_name,
-            layer=layer,
-            save_dir=save_dir,
-            device=cfg["device"],
-            architectures=architectures,
-            num_tokens=cfg["num_tokens"],
-            random_seeds=cfg["random_seeds"],
-            dictionary_widths=cfg["dictionary_widths"],
-            learning_rates=cfg["learning_rates"],
-            dry_run=cfg.get("dry_run", False),
-            use_mlflow=use_mlflow,
-            mlflow_parent_run_id=mlflow_parent_run_id,
-            save_checkpoints=cfg.get("save_checkpoints", False),
-            buffer_tokens=cfg.get("buffer_tokens", 250_000),
-            mixed_dataset=cfg.get("mixed_dataset", False),
-            remove_bos=cfg["remove_bos"],
-            max_activation_norm_multiple=cfg["max_activation_norm_multiple"],
-        )
-        all_mlflow_run_ids.extend(mlflow_run_ids)
+    for architecture in architectures:
+        for layer in layers:
+            save_dir = f"{cfg['save_dir']}_{model_name}_{architecture}".replace(
+                "/", "_"
+            )
 
-    ae_paths = utils.get_nested_folders(save_dir)
+            mlflow_parent_run_id = None
+            mlflow_parent_run = None
+            if use_mlflow:
+                from sae_research.training.mlflow_logging import start_sweep_run
+
+                mlflow_parent_run = start_sweep_run(
+                    experiment_name=cfg["mlflow_experiment"],
+                    model_name=model_name,
+                    layers=[layer],
+                    architectures=[architecture],
+                    run_cfg={
+                        "num_tokens": cfg["num_tokens"],
+                        "save_dir": save_dir,
+                    },
+                )
+                mlflow_parent_run_id = mlflow_parent_run.info.run_id
+
+            mlflow_run_ids = run_sae_training(
+                model_name=model_name,
+                layer=layer,
+                save_dir=save_dir,
+                device=cfg["device"],
+                architecture=architecture,
+                num_tokens=cfg["num_tokens"],
+                random_seeds=cfg["random_seeds"],
+                dictionary_widths=cfg["dictionary_widths"],
+                learning_rates=cfg["learning_rates"],
+                dry_run=cfg.get("dry_run", False),
+                use_mlflow=use_mlflow,
+                mlflow_parent_run_id=mlflow_parent_run_id,
+                mlflow_experiment=cfg["mlflow_experiment"],
+                save_checkpoints=cfg.get("save_checkpoints", False),
+                buffer_tokens=cfg.get("buffer_tokens", 250_000),
+                mixed_dataset=cfg.get("mixed_dataset", False),
+                remove_bos=cfg["remove_bos"],
+                max_activation_norm_multiple=cfg["max_activation_norm_multiple"],
+            )
+            all_mlflow_run_ids.extend(mlflow_run_ids)
+
+            if mlflow_parent_run is not None:
+                import mlflow
+
+                mlflow.end_run()
+
+    ae_paths = utils.get_nested_folders(cfg["save_dir"])
 
     eval_saes(
         model_name,
@@ -144,11 +153,6 @@ def main(config: str):
         mlflow_run_ids=all_mlflow_run_ids,
     )
 
-    if mlflow_parent_run is not None:
-        import mlflow
-
-        mlflow.end_run()
-
     print(f"Total time: {time.time() - start_time}")
 
     hf_repo_id = cfg.get("hf_repo_id")
@@ -158,7 +162,7 @@ def main(config: str):
         assert huggingface_hub.repo_exists(repo_id=hf_repo_id, repo_type="model")
         from sae_research.training.cli_runner import push_to_huggingface
 
-        push_to_huggingface(save_dir, hf_repo_id)
+        push_to_huggingface(cfg["save_dir"], hf_repo_id)
 
 
 if __name__ == "__main__":

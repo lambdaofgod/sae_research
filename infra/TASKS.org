@@ -547,6 +547,54 @@ weights + config + architecture code, all on one run ID.
 =DictionaryLearningSAEWrapper= in =sae_research/eval/sae_wrapper.py= already
 maps onto the pyfunc interface for sae_bench compatibility.
 
+** DONE trainSAE() must train one model at a time  :code:training:
+:PROPERTIES:
+:EFFORT: medium
+:END:
+
+=run_sae_training()= in =cli_runner.py= now loops over trainer configs and
+calls =trainSAE()= with =[config]= (single-element list) per config.
+=trainSAE()= itself is unchanged -- callers just pass one config at a time.
+Smoke tests already passed single configs, no changes needed there.
+
+** DONE Pydantic configs + string-based class references :code:training:
+:PROPERTIES:
+:EFFORT: medium
+:END:
+
+=config.py= trainer config dataclasses are broken in two ways:
+
+1. *Dataclasses don't validate*: no type checking, no serialization support,
+   =asdict()= silently drops class references. Convert all trainer config
+   dataclasses (=BaseTrainerConfig=, =TopKTrainerConfig=, etc.) to Pydantic
+   =BaseModel= subclasses.
+
+2. *=trainer: Type[Any]= and =dict_class: Type[Any]= store live class references*:
+   =asdict()= can't serialize them, and =trainSAE()= has to =del config["trainer"]=
+   before passing the rest as kwargs -- mutating the dict and losing the key.
+   Replace with dotted import path strings (e.g. ="dictionary_learning.trainers.batch_top_k.BatchTopKTrainer"=).
+   Resolve at instantiation time via =importlib.import_module()=.
+
+This also unblocks import-path-based loading (kill =_DICT_REGISTRY= in =utils.py=)
+and makes config dicts JSON/YAML-serializable without hacks.
+
+All dataclasses converted to Pydantic BaseModel. =trainer= and =dict_class= are
+now dotted import path strings. =resolve_class()= in =config.py= resolves them
+via =importlib=. =trainSAE()= no longer mutates config dicts (uses =.copy()= + =.pop()=).
+MLflow logging and reconciler updated to handle string paths.
+Both smoke tests pass (=smoke_test_mlflow_training.py=, =smoke_test_training_reconciler.py=).
+
+** TODO Architecture-declared data requirements        :code:training:
+:PROPERTIES:
+:EFFORT: small
+:END:
+
+=run_sae_training()= has a hardcoded =_TEMPORAL_ARCHITECTURES= set to decide
+whether to use =TemporalS3Buffer= vs the regular buffer. This is backwards --
+the architecture should declare its data requirements (e.g. =temporal: true=
+in per-architecture config), not a maintained set of names in the runner.
+Part of the unified trainer refactor.
+
 ** TODO MLflow pyfunc model logging                    :code:training:mlflow:
 :PROPERTIES:
 :EFFORT: medium
@@ -819,59 +867,40 @@ KFP UI per run. Follow the same pattern as the activault collection pipeline:
 Inject =MLFLOW_TRACKING_URI= + =MLFLOW_S3_ENDPOINT_URL= via K8s secrets.
 Pass =run_id= downstream as KFP artifact to link pipeline steps.
 
-** TODO Fix subprocess hack in train_pipeline.py
-:PROPERTIES:
-:EFFORT: small
-:END:
+** DONE Fix subprocess hack in train_pipeline.py
+Replaced =subprocess.run(['python', '-m', 'sae_research.training.cli_runner', ...])=
+with direct =from sae_research.training.cli_runner import cli_main= call.
+KFP component now parses layers/architectures strings into lists and calls
+=cli_main()= directly. Pipeline compiles successfully.
 
-=sae_train= component in =infra/activault/pipelines/training/train_pipeline.py=
-shells out via =subprocess.run(['python', '-m', 'sae_research.training.cli_runner'])=.
-This loses KFP error handling and logging.
+** DONE YAML-driven training runner
+=runner.py= takes =--config run.yaml= as its only argument. The YAML config
+is the complete spec -- =model_name=, =layers=, =architectures=, sweep params,
+=mlflow_experiment=, etc. =run_sae_training()= stays in =cli_runner.py=,
+=runner.py= calls it. =cli_runner.py= preserves the legacy CLI interface.
 
-Replace with direct function call once argparse is replaced with fire
-(see "Replace argparse with fire" task). The component body should import and
-call =run_sae_training()= directly.
+** DONE Training experiment separation
+=mlflow_experiment= is now a required parameter in =cli_main()= (no default,
+no fallback). =runner.py= already reads it from the YAML config.
 
-Depends on "Replace argparse with fire" task.
+Also changed =cli_main()= to take =layer: int= and =architecture: str=
+(singular) instead of lists -- one run trains one architecture on one layer.
+=runner.py= loops over architectures and layers, creating a separate MLflow
+parent run per (architecture, layer) pair.
 
-** TODO [#A] YAML-driven training runner
-=runner.py= uses =argparse= + hardcoded =demo_config= globals for all parameters.
-Adding a new parameter means editing =get_args()=, threading it through
-=run_sae_training()=, and for KFP also editing the pipeline component + rebuilding
-the container image.
+** DONE Training reconciliation
+=discover_training_gaps()= in =sae_research/training/training_reconciler.py=
+queries MLflow for FINISHED runs matching config signature (trainer_class,
+model, layer, dict_size, seed, lr, k/l1_penalty/target_l0/s). Returns only
+configs without a completed run. Wired into =run_sae_training()= -- when
+MLflow is enabled and =mlflow_experiment= is provided, configs are filtered
+before training starts.
 
-Plan:
-1. Rename =runner.py= > =cli_runner.py= (preserve existing CLI interface)
-2. New =runner.py= takes =--config run.yaml= as its only argument
-3. The YAML config is the complete, self-contained spec -- no merging with
-   =defaults.yaml=, no =demo_config= module globals. What you pass is what runs.
-4. =run_sae_training()= stays in =cli_runner.py=, new runner calls it
-5. Update KFP pipeline + smoke tests to use new runner
+Smoke test: =smoke_tests/smoke_test_training_reconciler.py=.
 
-Benefits:
-- Config files are versionable, diffable, shareable
-- KFP pipeline generates YAML at runtime from pipeline params > no image rebuild
-  for new parameters (same pattern as activault collection pipeline)
-- Reproducibility: config file is the complete spec for a training run
-- No hidden defaults -- everything is explicit in the YAML
-
-** TODO [#A] Training experiment separation
-Currently =mlflow_experiment= is hardcoded to ="sae_training"= in =defaults.yaml=.
-All runs -- smoke tests, debugging, real sweeps -- land in the same MLflow experiment.
-Need an =--experiment_name= argument threaded through the KFP pipeline > =runner.py= >
-=start_sweep_run()= so different campaigns are isolated (e.g. ="smoke_test"=,
-="topk_sweep_april2024"=). Same pattern as eval pipeline's required =--experiment-name=.
-
-** TODO [#B] Training reconciliation
-Before launching a training run, query MLflow for existing runs with the same config
-(model, layer, architecture, dict_size, seed, etc.) and skip already-completed ones.
-Same pattern as the eval reconciler (=discover_gaps()= / =reconcile()=):
-- =discover_training_gaps(tracking_uri, experiment_name, configs)= > list of configs
-  that don't have a completed MLflow run
-- Wire into =runner.py= or the KFP pipeline so resubmitting the same pipeline
-  is safe -- only missing configs get trained
-This is what makes it safe to resubmit a KFP pipeline run without retraining
-everything from scratch.
+Note: config dicts must be passed to the reconciler BEFORE =trainSAE()= which
+mutates them (deletes the "trainer" key). This is tracked under the Pydantic
+configs task above.
 
 *** TODO Report executed MLflow experiments and runs
 After training completes (with or without reconciliation), the runner should

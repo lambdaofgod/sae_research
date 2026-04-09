@@ -66,21 +66,11 @@ def start_trainer_run(
         "threshold_beta",
     ]
 
-    trainer_class_name = ""
-    if "trainer" in trainer_config:
-        trainer_cls = trainer_config["trainer"]
-        if isinstance(trainer_cls, type):
-            trainer_class_name = trainer_cls.__name__
-        else:
-            trainer_class_name = str(trainer_cls)
+    trainer_path = str(trainer_config.get("trainer", ""))
+    trainer_class_name = trainer_path.rsplit(".", 1)[-1] if trainer_path else ""
 
-    dict_class_name = ""
-    if "dict_class" in trainer_config:
-        dict_cls = trainer_config["dict_class"]
-        if isinstance(dict_cls, type):
-            dict_class_name = dict_cls.__name__
-        else:
-            dict_class_name = str(dict_cls)
+    dict_class_path = str(trainer_config.get("dict_class", ""))
+    dict_class_name = dict_class_path.rsplit(".", 1)[-1] if dict_class_path else ""
 
     run_name = f"trainer_{trainer_index}_{trainer_class_name}"
 

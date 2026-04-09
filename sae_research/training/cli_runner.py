@@ -31,7 +31,7 @@ def run_sae_training(
     layer: int,
     save_dir: str,
     device: str,
-    architectures: list,
+    architecture: str,
     num_tokens: int,
     random_seeds: list[int],
     dictionary_widths: list[int],
@@ -39,6 +39,7 @@ def run_sae_training(
     dry_run: bool = False,
     use_mlflow: bool = True,
     mlflow_parent_run_id: str | None = None,
+    mlflow_experiment: str | None = None,
     save_checkpoints: bool = False,
     buffer_tokens: int = 250_000,
     mixed_dataset: bool = False,
@@ -80,11 +81,12 @@ def run_sae_training(
     else:
         save_steps = None
 
+    # TODO: temporal should be declared by the architecture config, not hardcoded here
     _TEMPORAL_ARCHITECTURES = {
         demo_config.TrainerType.TEMPORAL_MATRYOSHKA_BATCH_TOP_K.value,
         demo_config.TrainerType.TEMPORAL_BATCH_TOP_K.value,
     }
-    is_temporal = bool(set(architectures) & _TEMPORAL_ARCHITECTURES)
+    is_temporal = architecture in _TEMPORAL_ARCHITECTURES
 
     llm_config = demo_config.LLM_CONFIG[model_name]
     submodule_name = f"resid_post_layer_{layer}"
@@ -184,7 +186,7 @@ def run_sae_training(
         )
 
     trainer_configs = demo_config.get_trainer_configs(
-        architectures,
+        [architecture],
         learning_rates,
         random_seeds,
         activation_dim,
@@ -198,26 +200,43 @@ def run_sae_training(
 
     print(f"len trainer configs: {len(trainer_configs)}")
     assert len(trainer_configs) > 0
+
+    if use_mlflow and mlflow_experiment is not None:
+        import mlflow as mlflow_lib
+        from sae_research.training.training_reconciler import discover_training_gaps
+
+        tracking_uri = mlflow_lib.get_tracking_uri()
+        trainer_configs = discover_training_gaps(
+            tracking_uri=tracking_uri,
+            experiment_name=mlflow_experiment,
+            trainer_configs=trainer_configs,
+        )
+        if len(trainer_configs) == 0:
+            print("All configs already have completed runs, skipping training")
+            return []
+
     save_dir = f"{save_dir}/{submodule_name}"
 
     if not dry_run:
-        # actually run the sweep
         # Temporal SAEs don't support activation normalization (different data shape)
         normalize = not is_temporal
-        mlflow_run_ids = trainSAE(
-            data=activation_buffer,
-            trainer_configs=trainer_configs,
-            use_mlflow=use_mlflow,
-            mlflow_parent_run_id=mlflow_parent_run_id,
-            steps=steps,
-            save_steps=save_steps,
-            save_dir=save_dir,
-            log_steps=log_steps,
-            normalize_activations=normalize,
-            verbose=False,
-            autocast_dtype=t.bfloat16,
-            backup_steps=1000,
-        )
+        mlflow_run_ids = []
+        for config in trainer_configs:
+            run_ids = trainSAE(
+                data=activation_buffer,
+                trainer_configs=[config],
+                use_mlflow=use_mlflow,
+                mlflow_parent_run_id=mlflow_parent_run_id,
+                steps=steps,
+                save_steps=save_steps,
+                save_dir=save_dir,
+                log_steps=log_steps,
+                normalize_activations=normalize,
+                verbose=False,
+                autocast_dtype=t.bfloat16,
+                backup_steps=1000,
+            )
+            mlflow_run_ids.extend(run_ids)
         return mlflow_run_ids
     return []
 
@@ -352,8 +371,9 @@ def push_to_huggingface(save_dir: str, repo_id: str):
 def cli_main(
     save_dir: str,
     model_name: str,
-    layers: list[int],
-    architectures: list[str],
+    layer: int,
+    architecture: str,
+    mlflow_experiment: str,
     device: str = "cuda:0",
     mlflow: bool = True,
     dry_run: bool = False,
@@ -361,7 +381,7 @@ def cli_main(
     hf_repo_id: str | None = None,
     mixed_dataset: bool = False,
 ):
-    """Train SAEs with config defaults from demo_config.
+    """Train SAEs for one model/layer/architecture.
 
     Prefer the YAML-driven runner (python -m sae_research.training.runner) for
     new workflows. This CLI preserves the legacy interface.
@@ -370,8 +390,9 @@ def cli_main(
         python -m sae_research.training.cli_runner \\
             --save_dir=run2 \\
             --model_name=EleutherAI/pythia-70m-deduped \\
-            --layers='[3]' \\
-            --architectures='[standard, jump_relu, batch_top_k]'
+            --layer=3 \\
+            --architecture=batch_top_k \\
+            --mlflow_experiment=my_sweep
     """
     if hf_repo_id:
         assert huggingface_hub.repo_exists(repo_id=hf_repo_id, repo_type="model")
@@ -383,7 +404,7 @@ def cli_main(
 
     start_time = time.time()
 
-    save_dir = f"{save_dir}_{model_name}_{'_'.join(architectures)}".replace("/", "_")
+    save_dir = f"{save_dir}_{model_name}_{architecture}".replace("/", "_")
 
     mlflow_parent_run_id = None
     mlflow_parent_run = None
@@ -391,10 +412,10 @@ def cli_main(
         from sae_research.training.mlflow_logging import start_sweep_run
 
         mlflow_parent_run = start_sweep_run(
-            experiment_name=demo_config.mlflow_experiment,
+            experiment_name=mlflow_experiment,
             model_name=model_name,
-            layers=layers,
-            architectures=architectures,
+            layers=[layer],
+            architectures=[architecture],
             run_cfg={
                 "num_tokens": demo_config.num_tokens,
                 "save_dir": save_dir,
@@ -402,25 +423,23 @@ def cli_main(
         )
         mlflow_parent_run_id = mlflow_parent_run.info.run_id
 
-    all_mlflow_run_ids = []
-    for layer in layers:
-        mlflow_run_ids = run_sae_training(
-            model_name=model_name,
-            layer=layer,
-            save_dir=save_dir,
-            device=device,
-            architectures=architectures,
-            num_tokens=demo_config.num_tokens,
-            random_seeds=demo_config.random_seeds,
-            dictionary_widths=demo_config.dictionary_widths,
-            learning_rates=demo_config.learning_rates,
-            dry_run=dry_run,
-            use_mlflow=mlflow,
-            mlflow_parent_run_id=mlflow_parent_run_id,
-            save_checkpoints=save_checkpoints,
-            mixed_dataset=mixed_dataset,
-        )
-        all_mlflow_run_ids.extend(mlflow_run_ids)
+    mlflow_run_ids = run_sae_training(
+        model_name=model_name,
+        layer=layer,
+        save_dir=save_dir,
+        device=device,
+        architecture=architecture,
+        num_tokens=demo_config.num_tokens,
+        random_seeds=demo_config.random_seeds,
+        dictionary_widths=demo_config.dictionary_widths,
+        learning_rates=demo_config.learning_rates,
+        dry_run=dry_run,
+        use_mlflow=mlflow,
+        mlflow_parent_run_id=mlflow_parent_run_id,
+        mlflow_experiment=mlflow_experiment,
+        save_checkpoints=save_checkpoints,
+        mixed_dataset=mixed_dataset,
+    )
 
     ae_paths = utils.get_nested_folders(save_dir)
 
@@ -430,7 +449,7 @@ def cli_main(
         demo_config.eval_num_inputs,
         device,
         overwrite_prev_results=True,
-        mlflow_run_ids=all_mlflow_run_ids,
+        mlflow_run_ids=mlflow_run_ids,
     )
 
     if mlflow_parent_run is not None:

@@ -12,34 +12,23 @@ def sae_train(
     save_checkpoints: bool,
     mlflow: bool,
 ):
-    """Run SAE training via runner.py."""
+    """Run SAE training via cli_runner."""
     import os
-    import subprocess
 
     os.environ["MLFLOW_TRACKING_URI"] = "http://activault-mlflow.default.svc:5000"
     os.environ["MLFLOW_S3_ENDPOINT_URL"] = "http://activault-garage.default:3900"
 
-    cmd = [
-        "python",
-        "-m",
-        "sae_research.training.cli_runner",
-        "--save_dir",
-        save_dir,
-        "--model_name",
-        model_name,
-        "--layers",
-        *layers.split(","),
-        "--architectures",
-        *architectures.split(","),
-        "--device",
-        device,
-    ]
-    if save_checkpoints:
-        cmd.append("--save_checkpoints")
-    if not mlflow:
-        cmd.append("--no-mlflow")
+    from sae_research.training.cli_runner import cli_main
 
-    subprocess.run(cmd, check=True)
+    cli_main(
+        save_dir=save_dir,
+        model_name=model_name,
+        layers=[int(x) for x in layers.split(",")],
+        architectures=architectures.split(","),
+        device=device,
+        save_checkpoints=save_checkpoints,
+        mlflow=mlflow,
+    )
 
 
 @dsl.pipeline(name="sae-training")
