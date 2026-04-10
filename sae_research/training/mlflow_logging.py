@@ -6,7 +6,6 @@ and standardized param/metric logging for SAE sweeps.
 """
 
 import os
-from typing import Optional
 
 import mlflow
 import torch as t
@@ -40,9 +39,14 @@ def start_trainer_run(
     parent_run_id: str | None,
     trainer_index: int,
     trainer_config: dict,
-) -> mlflow.ActiveRun:
-    """Start a child MLflow run for one trainer within a sweep."""
-    # Extract loggable params from the trainer config
+) -> mlflow.entities.Run:
+    """Start a child MLflow run for one trainer within a sweep.
+
+    Returns an mlflow.entities.Run (not ActiveRun) — the run stays in
+    RUNNING status until end_trainer_run() is called.
+    """
+    client = _get_client()
+
     param_keys = [
         "activation_dim",
         "dict_size",
@@ -74,14 +78,19 @@ def start_trainer_run(
 
     run_name = f"trainer_{trainer_index}_{trainer_class_name}"
 
-    run = mlflow.start_run(
+    experiment_id = "0"
+    if parent_run_id:
+        parent_run = client.get_run(parent_run_id)
+        experiment_id = parent_run.info.experiment_id
+
+    run = client.create_run(
+        experiment_id=experiment_id,
         run_name=run_name,
-        nested=True,
-        parent_run_id=parent_run_id,
         tags={
             "trainer_index": str(trainer_index),
             "trainer_class": trainer_class_name,
             "dict_class": dict_class_name,
+            "mlflow.parentRunId": parent_run_id or "",
         },
     )
 
@@ -98,37 +107,52 @@ def start_trainer_run(
     params["trainer_class"] = trainer_class_name
     params["dict_class"] = dict_class_name
 
-    mlflow.log_params(params)
+    for key, val in params.items():
+        client.log_param(run.info.run_id, key, val)
+
     return run
+
+
+def end_trainer_run(run_id: str):
+    """Mark a trainer run as FINISHED."""
+    _get_client().set_terminated(run_id)
+
+
+_client = None
+
+
+def _get_client() -> mlflow.tracking.MlflowClient:
+    global _client
+    if _client is None:
+        _client = mlflow.tracking.MlflowClient()
+    return _client
 
 
 def log_step_metrics(run_id: str, metrics: dict, step: int):
     """Log training metrics for a single step to a specific run."""
-    with mlflow.start_run(run_id=run_id, nested=True):
-        mlflow.log_metrics(metrics, step=step)
+    client = _get_client()
+    for key, value in metrics.items():
+        client.log_metric(run_id, key, value, step=step)
 
 
 def log_eval_metrics(run_id: str, eval_results: dict):
     """Log final evaluation metrics to a trainer's run."""
-    flat = {}
+    client = _get_client()
     for k, v in eval_results.items():
         if k == "hyperparameters":
             continue
         if isinstance(v, (int, float)):
-            flat[f"eval_{k}"] = v
+            client.log_metric(run_id, f"eval_{k}", v)
         elif isinstance(v, t.Tensor):
-            flat[f"eval_{k}"] = v.item()
-    if flat:
-        with mlflow.start_run(run_id=run_id, nested=True):
-            mlflow.log_metrics(flat)
+            client.log_metric(run_id, f"eval_{k}", v.item())
 
 
 def log_artifacts(run_id: str, save_dir: str):
     """Log ae.pt and config.json as artifacts for a trainer's run."""
-    with mlflow.start_run(run_id=run_id, nested=True):
-        ae_path = os.path.join(save_dir, "ae.pt")
-        config_path = os.path.join(save_dir, "config.json")
-        if os.path.exists(ae_path):
-            mlflow.log_artifact(ae_path)
-        if os.path.exists(config_path):
-            mlflow.log_artifact(config_path)
+    client = _get_client()
+    ae_path = os.path.join(save_dir, "ae.pt")
+    config_path = os.path.join(save_dir, "config.json")
+    if os.path.exists(ae_path):
+        client.log_artifact(run_id, ae_path)
+    if os.path.exists(config_path):
+        client.log_artifact(run_id, config_path)

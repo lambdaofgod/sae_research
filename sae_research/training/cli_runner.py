@@ -41,13 +41,9 @@ def run_sae_training(
     save_checkpoints: bool = False,
     buffer_tokens: int = 250_000,
     mixed_dataset: bool = False,
-    remove_bos: bool | None = None,
-    max_activation_norm_multiple: float | None = None,
+    remove_bos: bool = True,
+    max_activation_norm_multiple: float = 10,
 ):
-    if remove_bos is None:
-        remove_bos = demo_config.remove_bos
-    if max_activation_norm_multiple is None:
-        max_activation_norm_multiple = demo_config.max_activation_norm_multiple
 
     random.seed(random_seeds[0])
     t.manual_seed(random_seeds[0])
@@ -92,7 +88,10 @@ def run_sae_training(
 
     if is_temporal and llm_config.activault is not None:
         # Temporal Activault path: preserve sequence order for adjacent-token pairing
-        from dictionary_learning.activault_s3_buffer import S3RCache, create_s3_client
+        from dictionary_learning.activault_s3_buffer import create_s3_client
+        from sae_research.training.resilient_s3_cache import (
+            ResilientS3RCache as S3RCache,
+        )
         import os
 
         s3_client = create_s3_client(
@@ -105,6 +104,7 @@ def run_sae_training(
             bucket_name=llm_config.activault.s3_bucket,
             buffer_size=llm_config.activault.s3_buffer_size,
             n_workers=llm_config.activault.s3_workers,
+            concurrency=llm_config.activault.s3_concurrency,
             device=device,
             return_ids=True,
             shuffle=False,
@@ -234,9 +234,12 @@ def eval_saes(
     overwrite_prev_results: bool = False,
     transcoder: bool = False,
     mlflow_run_ids: list[str] | None = None,
+    random_seed: int = 0,
+    remove_bos: bool = True,
+    max_activation_norm_multiple: float = 10,
 ) -> dict:
-    random.seed(demo_config.random_seeds[0])
-    t.manual_seed(demo_config.random_seeds[0])
+    random.seed(random_seed)
+    t.manual_seed(random_seed)
 
     if transcoder:
         io = "in_and_out"
@@ -306,8 +309,8 @@ def eval_saes(
             io=io,
             d_submodule=activation_dim,
             device=device,
-            remove_bos=demo_config.remove_bos,
-            max_activation_norm_multiple=demo_config.max_activation_norm_multiple,
+            remove_bos=remove_bos,
+            max_activation_norm_multiple=max_activation_norm_multiple,  # pyrefly: ignore [bad-argument-type]
         )
 
         eval_results = evaluate(
@@ -358,12 +361,19 @@ def cli_main(
     layer: int,
     architecture: str,
     mlflow_experiment: str,
+    num_tokens: int = 200_000_000,
+    random_seeds: list[int] = [0],
+    dictionary_widths: list[int] = [16384],
+    learning_rates: list[float] = [0.0001],
+    eval_num_inputs: int = 200,
     device: str = "cuda:0",
     mlflow: bool = True,
     dry_run: bool = False,
     save_checkpoints: bool = False,
     hf_repo_id: str | None = None,
     mixed_dataset: bool = False,
+    remove_bos: bool = True,
+    max_activation_norm_multiple: float = 10,
 ):
     """Train SAEs for one model/layer/architecture.
 
@@ -401,7 +411,7 @@ def cli_main(
             layers=[layer],
             architectures=[architecture],
             run_cfg={
-                "num_tokens": demo_config.num_tokens,
+                "num_tokens": num_tokens,
                 "save_dir": save_dir,
             },
         )
@@ -413,15 +423,17 @@ def cli_main(
         save_dir=save_dir,
         device=device,
         architecture=architecture,
-        num_tokens=demo_config.num_tokens,
-        random_seeds=demo_config.random_seeds,
-        dictionary_widths=demo_config.dictionary_widths,
-        learning_rates=demo_config.learning_rates,
+        num_tokens=num_tokens,
+        random_seeds=random_seeds,
+        dictionary_widths=dictionary_widths,
+        learning_rates=learning_rates,
         dry_run=dry_run,
         use_mlflow=mlflow,
         mlflow_parent_run_id=mlflow_parent_run_id,
         save_checkpoints=save_checkpoints,
         mixed_dataset=mixed_dataset,
+        remove_bos=remove_bos,
+        max_activation_norm_multiple=max_activation_norm_multiple,
     )
 
     ae_paths = utils.get_nested_folders(save_dir)
@@ -429,10 +441,12 @@ def cli_main(
     eval_saes(
         model_name,
         ae_paths,
-        demo_config.eval_num_inputs,
+        eval_num_inputs,
         device,
         overwrite_prev_results=True,
         mlflow_run_ids=mlflow_run_ids,
+        remove_bos=remove_bos,
+        max_activation_norm_multiple=max_activation_norm_multiple,
     )
 
     if mlflow_parent_run is not None:

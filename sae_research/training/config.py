@@ -70,10 +70,6 @@ def _load_architectures() -> dict:
     return _load_yaml("architectures.yaml")
 
 
-def _load_defaults() -> dict:
-    return _load_yaml("defaults.yaml")
-
-
 # ---------------------------------------------------------------------------
 # Enums & config models
 # ---------------------------------------------------------------------------
@@ -101,6 +97,7 @@ class ActivaultConfig(BaseModel):
     s3_bucket: str = "activations"
     s3_buffer_size: int = 2
     s3_workers: int = 2
+    s3_concurrency: int = 5
 
 
 class LLMConfig(BaseModel):
@@ -125,7 +122,6 @@ class SparsityPenalties(BaseModel):
 # ---------------------------------------------------------------------------
 
 _arch_cfg = _load_architectures()
-_defaults_cfg = _load_defaults()
 
 LLM_CONFIG = _load_models()
 
@@ -140,16 +136,6 @@ K_ANNEAL_END_FRACTION = _training_params["k_anneal_end_fraction"]
 
 TEMPORAL_TEMP_ALPHAS = _arch_cfg.get("temporal_temp_alphas", [0.1])
 TEMPORAL_CONTRASTIVE = _arch_cfg.get("temporal_contrastive", [False])
-
-num_tokens = _defaults_cfg["num_tokens"]
-print(f"NOTE: Training on {num_tokens} tokens")
-eval_num_inputs = _defaults_cfg["eval_num_inputs"]
-random_seeds = _defaults_cfg["random_seeds"]
-dictionary_widths = _defaults_cfg["dictionary_widths"]
-learning_rates = _defaults_cfg["learning_rates"]
-remove_bos = _defaults_cfg["remove_bos"]
-max_activation_norm_multiple = _defaults_cfg["max_activation_norm_multiple"]
-mlflow_experiment = _defaults_cfg["mlflow_experiment"]
 
 
 # ---------------------------------------------------------------------------

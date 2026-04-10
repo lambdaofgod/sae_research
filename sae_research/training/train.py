@@ -17,6 +17,7 @@ from dictionary_learning.trainers.standard import StandardTrainer
 from sae_research.training.config import resolve_class
 from sae_research.training.mlflow_logging import (
     start_trainer_run,
+    end_trainer_run,
     log_step_metrics,
     log_artifacts,
 )
@@ -157,8 +158,6 @@ def trainSAE(
     # Start MLflow child runs per trainer
     mlflow_run_ids = []
     if use_mlflow:
-        import mlflow
-
         for i, trainer in enumerate(trainers):
             run = start_trainer_run(
                 parent_run_id=mlflow_parent_run_id,
@@ -170,8 +169,6 @@ def trainSAE(
                 },
             )
             mlflow_run_ids.append(run.info.run_id)
-            # End the child run so the parent stays active for the next child
-            mlflow.end_run()
 
     # make save dirs, export config
     if save_dir is not None:
@@ -301,10 +298,11 @@ def trainSAE(
                 checkpoint["norm_factor"] = norm_factor
             t.save(checkpoint, os.path.join(save_dir, "ae.pt"))
 
-    # Log final artifacts to MLflow
+    # Log final artifacts and mark runs as finished
     if use_mlflow:
         for run_id, dir in zip(mlflow_run_ids, save_dirs):
             if dir is not None:
                 log_artifacts(run_id, dir)
+            end_trainer_run(run_id)
 
     return mlflow_run_ids

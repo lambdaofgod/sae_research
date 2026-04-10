@@ -43,9 +43,9 @@ def create_activault_buffer(activault_config, sae_batch_size: int, device: str):
     """
     from dictionary_learning.activault_s3_buffer import (
         ActivaultS3ActivationBuffer,
-        S3RCache,
         create_s3_client,
     )
+    from sae_research.training.resilient_s3_cache import ResilientS3RCache as S3RCache
 
     endpoint_url = os.environ.get("AWS_ENDPOINT_URL") or os.environ.get(
         "S3_ENDPOINT_URL"
@@ -61,6 +61,7 @@ def create_activault_buffer(activault_config, sae_batch_size: int, device: str):
         return_ids=True,
         shuffle=True,
         n_workers=activault_config.s3_workers,
+        concurrency=activault_config.s3_concurrency,
     )
 
     buffer = ActivaultS3ActivationBuffer(
