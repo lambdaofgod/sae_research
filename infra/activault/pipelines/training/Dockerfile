@@ -37,3 +37,6 @@ COPY pyproject.toml /app/pyproject.toml
 COPY sae_research/ /app/sae_research/
 RUN touch /app/README.md
 RUN uv pip install --system --no-deps -e .
+
+# Training reconciler (orchestration code, not part of sae_research package)
+COPY infra/activault/pipelines/training/training_reconciler.py /app/training_reconciler.py

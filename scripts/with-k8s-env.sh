@@ -3,8 +3,7 @@
 # are running, then exec the given command.
 #
 # Usage:
-#   bash smoke_tests/with-k8s-env.sh uv run python smoke_tests/smoke_test_mlflow_training.py
-#   bash smoke_tests/with-k8s-env.sh uv run python smoke_tests/smoke_test_eval_reconciler.py
+#   bash smoke_tests/with-k8s-env.sh uv run python smoke_tests/smoke_test_training.py
 set -euo pipefail
 
 # ── Use minikube kubectl if kubectl is not available ───────────────────────

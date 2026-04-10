@@ -128,7 +128,6 @@ def main(config: str):
                 dry_run=cfg.get("dry_run", False),
                 use_mlflow=use_mlflow,
                 mlflow_parent_run_id=mlflow_parent_run_id,
-                mlflow_experiment=cfg["mlflow_experiment"],
                 save_checkpoints=cfg.get("save_checkpoints", False),
                 buffer_tokens=cfg.get("buffer_tokens", 250_000),
                 mixed_dataset=cfg.get("mixed_dataset", False),

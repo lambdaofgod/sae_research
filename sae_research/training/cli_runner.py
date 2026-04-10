@@ -10,7 +10,6 @@ import json
 import time
 import huggingface_hub
 from datasets import config
-from transformers import AutoTokenizer
 
 from sae_research.training import config as demo_config
 
@@ -39,7 +38,6 @@ def run_sae_training(
     dry_run: bool = False,
     use_mlflow: bool = True,
     mlflow_parent_run_id: str | None = None,
-    mlflow_experiment: str | None = None,
     save_checkpoints: bool = False,
     buffer_tokens: int = 250_000,
     mixed_dataset: bool = False,
@@ -200,20 +198,6 @@ def run_sae_training(
 
     print(f"len trainer configs: {len(trainer_configs)}")
     assert len(trainer_configs) > 0
-
-    if use_mlflow and mlflow_experiment is not None:
-        import mlflow as mlflow_lib
-        from sae_research.training.training_reconciler import discover_training_gaps
-
-        tracking_uri = mlflow_lib.get_tracking_uri()
-        trainer_configs = discover_training_gaps(
-            tracking_uri=tracking_uri,
-            experiment_name=mlflow_experiment,
-            trainer_configs=trainer_configs,
-        )
-        if len(trainer_configs) == 0:
-            print("All configs already have completed runs, skipping training")
-            return []
 
     save_dir = f"{save_dir}/{submodule_name}"
 
@@ -436,7 +420,6 @@ def cli_main(
         dry_run=dry_run,
         use_mlflow=mlflow,
         mlflow_parent_run_id=mlflow_parent_run_id,
-        mlflow_experiment=mlflow_experiment,
         save_checkpoints=save_checkpoints,
         mixed_dataset=mixed_dataset,
     )

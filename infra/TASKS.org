@@ -584,6 +584,23 @@ via =importlib=. =trainSAE()= no longer mutates config dicts (uses =.copy()= + =
 MLflow logging and reconciler updated to handle string paths.
 Both smoke tests pass (=smoke_test_mlflow_training.py=, =smoke_test_training_reconciler.py=).
 
+** DONE Temporal SAE training smoke test                :code:training:test:
+:PROPERTIES:
+:EFFORT: small
+:END:
+
+No existing smoke test covers the temporal SAE training path
+(=temporal_batch_top_k=, =temporal_matryoshka_batch_top_k=). These architectures
+use =TemporalS3Buffer= which yields =[batch, 2, d_model]= tensors (adjacent-token
+pairs) instead of the standard =[batch, d_model]= shape. The entire temporal data
+loading + trainer instantiation + training loop is untested.
+
+Added temporal_batch_top_k as a second architecture in =smoke_tests/smoke_test_training.py=
+(renamed from =smoke_test_mlflow_training.py=). Uses a =StubActivationBuffer= that
+subclasses =ActivaultS3ActivationBuffer= and overrides =refresh()= with synthetic data,
+exercising the real =__next__()= batching logic. Also removed the kubernetes backend
+option from all smoke tests — they always use a local throwaway MLflow server now.
+
 ** TODO Architecture-declared data requirements        :code:training:
 :PROPERTIES:
 :EFFORT: small
@@ -750,6 +767,12 @@ Required =--disable-security-middleware= on MLflow server (see [[file:MLFLOW.org
 and FQDN =activault-mlflow.default.svc:5000= as tracking URI for cross-namespace
 access from =kubeflow=.
 
+** TODO Move eval reconciler from sae_research to infra
+=sae_research/eval/reconciler.py= is orchestration, not experiment code.
+Move to =infra/activault/pipelines/eval/=. Remove =smoke_tests/smoke_test_eval_reconciler.py=
+(reconciler testing happens at the pipeline level, not as library smoke tests).
+Update imports in pipeline files.
+
 ** TODO Report executed MLflow experiments and runs
 After reconciliation, the eval pipeline should output a summary of what actually
 ran: experiment names and run IDs. Currently =reconcile()= returns results but
@@ -901,6 +924,47 @@ Smoke test: =smoke_tests/smoke_test_training_reconciler.py=.
 Note: config dicts must be passed to the reconciler BEFORE =trainSAE()= which
 mutates them (deletes the "trainer" key). This is tracked under the Pydantic
 configs task above.
+
+** TODO Make run_sae_training single-config
+=run_sae_training()= still sweeps over =seeds × widths × LRs × target_l0s=
+internally via =get_trainer_configs()=. One call = one job = one hyperparameter
+setting. The sweep loop belongs in the runner / orchestrator, not inside
+=run_sae_training()=. Prerequisite for fan-out to separate GPU jobs.
+
+** TODO Flat list run configs
+The YAML config should be a flat list of jobs, not a single dict with
+=architectures= and =layers= lists that the runner cross-products internally.
+Each item in the list is one job = one architecture, one layer, one
+hyperparameter setting:
+
+#+begin_example
+- model_name: google/gemma-2-2b-it
+  architecture: temporal_batch_top_k
+  layer: 13
+  num_tokens: 200_000_000
+  dictionary_width: 16384
+  learning_rate: 0.0001
+  seed: 0
+  k: 64
+  mlflow_experiment: temporal_sae_training
+  ...
+
+- model_name: google/gemma-2-2b-it
+  architecture: temporal_matryoshka_batch_top_k
+  layer: 13
+  num_tokens: 200_000_000
+  ...
+#+end_example
+
+The runner iterates the list and dispatches each entry to
+=run_sae_training()=. Shared defaults (=device=, =eval_num_inputs=, etc.)
+can live in a top-level =defaults:= key to avoid repetition.
+
+** TODO Move training reconciler from sae_research to infra
+=sae_research/training/training_reconciler.py= is orchestration, not experiment code.
+Move to =infra/activault/pipelines/training/=. Remove =smoke_tests/smoke_test_training_reconciler.py=
+(reconciler testing happens at the pipeline level, not as library smoke tests).
+Update imports in =runner.py= and pipeline files.
 
 *** TODO Report executed MLflow experiments and runs
 After training completes (with or without reconciliation), the runner should

@@ -10,7 +10,6 @@ Usage:
     uv run python smoke_tests/smoke_test_eval.py --backend=local    # uses local server
 """
 
-import os
 import shutil
 import tempfile
 
@@ -28,7 +27,7 @@ from sae_research.eval.components import (
 )
 
 # Reuse the MLflow backend context manager from the training smoke test
-from smoke_tests.smoke_test_mlflow_training import mlflow_backend
+from smoke_tests.smoke_test_training import mlflow_backend
 
 
 # Must match pythia-70m hidden_size
@@ -173,13 +172,9 @@ def run_smoke_test(tracking_uri: str):
             shutil.rmtree(artifact_dir, ignore_errors=True)
 
 
-def main(backend: str = "kubernetes"):
-    """MLflow eval smoke test.
-
-    Args:
-        backend: MLflow backend -- "kubernetes" or "local".
-    """
-    with mlflow_backend(backend) as tracking_uri:
+def main():
+    """MLflow eval smoke test."""
+    with mlflow_backend() as tracking_uri:
         run_smoke_test(tracking_uri)
 
 

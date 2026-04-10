@@ -40,7 +40,7 @@ def reconcile_and_eval(
     """
     import json
 
-    from sae_research.eval.reconciler import reconcile
+    from eval_reconciler import reconcile
 
     if not experiment_name:
         raise ValueError(
