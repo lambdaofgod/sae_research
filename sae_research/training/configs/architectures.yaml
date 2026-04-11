@@ -1,8 +1,53 @@
 # Architecture-specific hyperparameter grids.
 #
+# definitions: trainer and dict_class import paths per architecture name
 # sparsity_penalties: sweep values for architectures that use L1-style sparsity
 # target_l0s: sweep values for architectures that use top-k style sparsity
 # training_params: shared training schedule parameters
+
+definitions:
+  p_anneal:
+    trainer: dictionary_learning.trainers.p_anneal.PAnnealTrainer
+    dict_class: dictionary_learning.dictionary.AutoEncoder
+  standard:
+    trainer: dictionary_learning.trainers.standard.StandardTrainer
+    dict_class: dictionary_learning.dictionary.AutoEncoder
+  standard_new:
+    trainer: dictionary_learning.trainers.standard.StandardTrainerAprilUpdate
+    dict_class: dictionary_learning.dictionary.AutoEncoder
+  gated:
+    trainer: dictionary_learning.trainers.gdm.GatedSAETrainer
+    dict_class: dictionary_learning.dictionary.GatedAutoEncoder
+  top_k:
+    trainer: dictionary_learning.trainers.top_k.TopKTrainer
+    dict_class: dictionary_learning.trainers.top_k.AutoEncoderTopK
+  batch_top_k:
+    trainer: dictionary_learning.trainers.batch_top_k.BatchTopKTrainer
+    dict_class: dictionary_learning.trainers.batch_top_k.BatchTopKSAE
+  matryoshka_batch_top_k:
+    trainer: dictionary_learning.trainers.matryoshka_batch_top_k.MatryoshkaBatchTopKTrainer
+    dict_class: dictionary_learning.trainers.matryoshka_batch_top_k.MatryoshkaBatchTopKSAE
+  jump_relu:
+    trainer: dictionary_learning.trainers.jumprelu.JumpReluTrainer
+    dict_class: dictionary_learning.dictionary.JumpReluAutoEncoder
+  thresholding_topk:
+    trainer: sae_research.thresholding_sae.ThresholdingTopKTrainer
+    dict_class: sae_research.thresholding_sae.ThresholdingAutoEncoderTopK
+  matching_pursuit:
+    trainer: sae_research.matching_pursuit_sae.MatchingPursuitTrainer
+    dict_class: sae_research.matching_pursuit_sae.MatchingPursuitAutoEncoder
+  nested_thresholding_topk:
+    trainer: sae_research.thresholding_sae.NestedThresholdingTopKTrainer
+    dict_class: sae_research.thresholding_sae.NestedThresholdingAutoEncoderTopK
+  stiefel_nested_thresholding_topk:
+    trainer: sae_research.stiefel_sae.StiefelNestedThresholdingTopKTrainer
+    dict_class: sae_research.stiefel_sae.StiefelNestedThresholdingAutoEncoderTopK
+  temporal_matryoshka_batch_top_k:
+    trainer: sae_research.temporal_sae.TemporalMatryoshkaBatchTopKTrainer
+    dict_class: sae_research.temporal_sae.TemporalMatryoshkaBatchTopKSAE
+  temporal_batch_top_k:
+    trainer: sae_research.temporal_sae.TemporalBatchTopKTrainer
+    dict_class: sae_research.temporal_sae.TemporalBatchTopKSAE
 
 sparsity_penalties:
   standard: [0.012, 0.015, 0.02, 0.03, 0.04, 0.06]

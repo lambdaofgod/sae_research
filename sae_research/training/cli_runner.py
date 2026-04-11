@@ -3,6 +3,8 @@ import os
 # I believe this environment variable should be set before importing torch
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+import itertools
+
 import torch as t
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import random
@@ -30,30 +32,36 @@ def run_sae_training(
     layer: int,
     save_dir: str,
     device: str,
-    architecture: str,
+    trainer: str,
+    dict_class: str,
     num_tokens: int,
-    random_seeds: list[int],
-    dictionary_widths: list[int],
-    learning_rates: list[float],
+    seed: int,
+    dictionary_width: int,
+    learning_rate: float,
     dry_run: bool = False,
-    use_mlflow: bool = True,
-    mlflow_parent_run_id: str | None = None,
+    mlflow_experiment: str = "",
     save_checkpoints: bool = False,
     buffer_tokens: int = 250_000,
     mixed_dataset: bool = False,
     remove_bos: bool = True,
     max_activation_norm_multiple: float = 10,
-):
+    **arch_params,
+) -> str | None:
+    """Train a single SAE configuration.
 
-    random.seed(random_seeds[0])
-    t.manual_seed(random_seeds[0])
+    One call = one config = one buffer = one trainSAE() call.
+    trainer and dict_class are dotted import path strings.
+    Architecture-specific params (k, l1_penalty, temporal, etc.) go in **arch_params.
+    """
+    random.seed(seed)
+    t.manual_seed(seed)
 
     # model and data parameters
-    context_length = demo_config.LLM_CONFIG[model_name].context_length
-
-    llm_batch_size = demo_config.LLM_CONFIG[model_name].llm_batch_size
-    sae_batch_size = demo_config.LLM_CONFIG[model_name].sae_batch_size
-    dtype = demo_config.LLM_CONFIG[model_name].dtype
+    llm_config = demo_config.LLM_CONFIG[model_name]
+    context_length = llm_config.context_length
+    llm_batch_size = llm_config.llm_batch_size
+    sae_batch_size = llm_config.sae_batch_size
+    dtype = llm_config.dtype
 
     num_buffer_inputs = buffer_tokens // context_length
     print(f"buffer_size: {num_buffer_inputs}, buffer_size_in_tokens: {buffer_tokens}")
@@ -75,14 +83,10 @@ def run_sae_training(
     else:
         save_steps = None
 
-    # TODO: temporal should be declared by the architecture config, not hardcoded here
-    _TEMPORAL_ARCHITECTURES = {
-        demo_config.TrainerType.TEMPORAL_MATRYOSHKA_BATCH_TOP_K.value,
-        demo_config.TrainerType.TEMPORAL_BATCH_TOP_K.value,
-    }
-    is_temporal = architecture in _TEMPORAL_ARCHITECTURES
+    # Temporal architectures have "temporal" as a required config field,
+    # so its presence in arch_params signals the buffer type.
+    is_temporal = "temporal" in arch_params
 
-    llm_config = demo_config.LLM_CONFIG[model_name]
     submodule_name = f"resid_post_layer_{layer}"
     io = "out"
 
@@ -183,46 +187,42 @@ def run_sae_training(
             max_activation_norm_multiple=max_activation_norm_multiple,  # pyrefly: ignore [bad-argument-type]
         )
 
-    trainer_configs = demo_config.get_trainer_configs(
-        [architecture],
-        learning_rates,
-        random_seeds,
-        activation_dim,
-        dictionary_widths,
-        model_name,
-        device,
-        layer,
-        submodule_name,
-        steps,
+    trainer_config = demo_config.build_trainer_config(
+        trainer=trainer,
+        dict_class=dict_class,
+        activation_dim=activation_dim,
+        dict_size=dictionary_width,
+        seed=seed,
+        lr=learning_rate,
+        steps=steps,
+        device=device,
+        layer=layer,
+        model_name=model_name,
+        submodule_name=submodule_name,
+        **arch_params,
     )
-
-    print(f"len trainer configs: {len(trainer_configs)}")
-    assert len(trainer_configs) > 0
 
     save_dir = f"{save_dir}/{submodule_name}"
 
-    if not dry_run:
-        # Temporal SAEs don't support activation normalization (different data shape)
-        normalize = not is_temporal
-        mlflow_run_ids = []
-        for config in trainer_configs:
-            run_ids = trainSAE(
-                data=activation_buffer,
-                trainer_configs=[config],
-                use_mlflow=use_mlflow,
-                mlflow_parent_run_id=mlflow_parent_run_id,
-                steps=steps,
-                save_steps=save_steps,
-                save_dir=save_dir,
-                log_steps=log_steps,
-                normalize_activations=normalize,
-                verbose=False,
-                autocast_dtype=t.bfloat16,
-                backup_steps=1000,
-            )
-            mlflow_run_ids.extend(run_ids)
-        return mlflow_run_ids
-    return []
+    if dry_run:
+        return None
+
+    # Temporal SAEs don't support activation normalization (different data shape)
+    normalize = not is_temporal
+    run_ids = trainSAE(
+        data=activation_buffer,
+        trainer_configs=[trainer_config],
+        mlflow_experiment=mlflow_experiment,
+        steps=steps,
+        save_steps=save_steps,
+        save_dir=save_dir,
+        log_steps=log_steps,
+        normalize_activations=normalize,
+        verbose=False,
+        autocast_dtype=t.bfloat16,
+        backup_steps=1000,
+    )
+    return run_ids[0] if run_ids else None
 
 
 @t.no_grad()
@@ -367,7 +367,6 @@ def cli_main(
     learning_rates: list[float] = [0.0001],
     eval_num_inputs: int = 200,
     device: str = "cuda:0",
-    mlflow: bool = True,
     dry_run: bool = False,
     save_checkpoints: bool = False,
     hf_repo_id: str | None = None,
@@ -400,41 +399,39 @@ def cli_main(
 
     save_dir = f"{save_dir}_{model_name}_{architecture}".replace("/", "_")
 
-    mlflow_parent_run_id = None
-    mlflow_parent_run = None
-    if mlflow:
-        from sae_research.training.mlflow_logging import start_sweep_run
+    trainer_path, dict_class_path = demo_config.resolve_architecture(architecture)
+    sae_batch_size = demo_config.LLM_CONFIG[model_name].sae_batch_size
+    steps = int(num_tokens / sae_batch_size)
+    arch_sweep = demo_config.get_architecture_sweep_params(architecture, steps)
 
-        mlflow_parent_run = start_sweep_run(
-            experiment_name=mlflow_experiment,
+    mlflow_run_ids = []
+    for seed, dict_width, lr, arch_params in itertools.product(
+        random_seeds,
+        dictionary_widths,
+        learning_rates,
+        arch_sweep,
+    ):
+        run_id = run_sae_training(
             model_name=model_name,
-            layers=[layer],
-            architectures=[architecture],
-            run_cfg={
-                "num_tokens": num_tokens,
-                "save_dir": save_dir,
-            },
+            layer=layer,
+            save_dir=save_dir,
+            device=device,
+            trainer=trainer_path,
+            dict_class=dict_class_path,
+            num_tokens=num_tokens,
+            seed=seed,
+            dictionary_width=dict_width,
+            learning_rate=lr,
+            dry_run=dry_run,
+            mlflow_experiment=mlflow_experiment,
+            save_checkpoints=save_checkpoints,
+            mixed_dataset=mixed_dataset,
+            remove_bos=remove_bos,
+            max_activation_norm_multiple=max_activation_norm_multiple,
+            **arch_params,
         )
-        mlflow_parent_run_id = mlflow_parent_run.info.run_id
-
-    mlflow_run_ids = run_sae_training(
-        model_name=model_name,
-        layer=layer,
-        save_dir=save_dir,
-        device=device,
-        architecture=architecture,
-        num_tokens=num_tokens,
-        random_seeds=random_seeds,
-        dictionary_widths=dictionary_widths,
-        learning_rates=learning_rates,
-        dry_run=dry_run,
-        use_mlflow=mlflow,
-        mlflow_parent_run_id=mlflow_parent_run_id,
-        save_checkpoints=save_checkpoints,
-        mixed_dataset=mixed_dataset,
-        remove_bos=remove_bos,
-        max_activation_norm_multiple=max_activation_norm_multiple,
-    )
+        if run_id is not None:
+            mlflow_run_ids.append(run_id)
 
     ae_paths = utils.get_nested_folders(save_dir)
 
@@ -448,11 +445,6 @@ def cli_main(
         remove_bos=remove_bos,
         max_activation_norm_multiple=max_activation_norm_multiple,
     )
-
-    if mlflow_parent_run is not None:
-        import mlflow as mlflow_lib
-
-        mlflow_lib.end_run()
 
     print(f"Total time: {time.time() - start_time}")
 

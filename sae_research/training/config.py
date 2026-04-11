@@ -283,6 +283,139 @@ class JumpReluTrainerConfig(BaseTrainerConfig):
 
 
 # ---------------------------------------------------------------------------
+# Architecture resolution (YAML-driven, no Python registry)
+# ---------------------------------------------------------------------------
+
+_arch_defs: dict[str, dict[str, str]] = _arch_cfg.get("definitions", {})
+
+
+def resolve_architecture(architecture: str) -> tuple[str, str]:
+    """Look up (trainer_path, dict_class_path) for an architecture name.
+
+    The mapping lives in architectures.yaml under ``definitions:``.
+    New architectures = new YAML entries, no Python code changes.
+    Callers that already have import path strings don't need this.
+    """
+    if architecture not in _arch_defs:
+        raise ValueError(
+            f"Unknown architecture: {architecture!r}. Known: {sorted(_arch_defs)}"
+        )
+    d = _arch_defs[architecture]
+    return d["trainer"], d["dict_class"]
+
+
+def build_trainer_config(
+    trainer: str,
+    dict_class: str,
+    activation_dim: int,
+    dict_size: int,
+    seed: int,
+    lr: float,
+    steps: int,
+    device: str,
+    layer: int,
+    model_name: str,
+    submodule_name: str,
+    warmup_steps: int = WARMUP_STEPS,
+    decay_start_fraction: float = DECAY_START_FRACTION,
+    **arch_params,
+) -> dict:
+    """Build a single trainer config dict.
+
+    ``trainer`` and ``dict_class`` are dotted import path strings resolved
+    at training time by ``trainSAE()``. Architecture-specific params
+    (k, l1_penalty, temporal, etc.) go in **arch_params.
+    No Pydantic validation here -- the trainer constructor validates.
+    """
+    config = {
+        "trainer": trainer,
+        "dict_class": dict_class,
+        "activation_dim": activation_dim,
+        "dict_size": dict_size,
+        "seed": seed,
+        "lr": lr,
+        "steps": steps,
+        "warmup_steps": warmup_steps,
+        "decay_start": int(steps * decay_start_fraction),
+        "device": device,
+        "layer": layer,
+        "lm_name": model_name,
+        "submodule_name": submodule_name,
+    }
+    config.update(arch_params)
+    return config
+
+
+def get_architecture_sweep_params(architecture: str, steps: int) -> list[dict]:
+    """Return architecture-specific parameter sets for sweeping.
+
+    Each dict contains all params specific to one point in the architecture's
+    sweep dimension (e.g. one k value for top-k), including step-dependent
+    computed params (k_anneal_steps, sparsity_warmup_steps).
+
+    Cross-product these with (seeds x dict_sizes x learning_rates) to get
+    the full sweep grid.
+    """
+    anneal_end = int(steps * K_ANNEAL_END_FRACTION)
+
+    if architecture == TrainerType.STANDARD.value:
+        return [
+            {"l1_penalty": p, "sparsity_warmup_steps": SPARSITY_WARMUP_STEPS}
+            for p in SPARSITY_PENALTIES.standard
+        ]
+    elif architecture == TrainerType.STANDARD_NEW.value:
+        return [
+            {"l1_penalty": p, "sparsity_warmup_steps": SPARSITY_WARMUP_STEPS}
+            for p in SPARSITY_PENALTIES.standard_new
+        ]
+    elif architecture == TrainerType.GATED.value:
+        return [
+            {"l1_penalty": p, "sparsity_warmup_steps": SPARSITY_WARMUP_STEPS}
+            for p in SPARSITY_PENALTIES.gated
+        ]
+    elif architecture == TrainerType.P_ANNEAL.value:
+        return [
+            {
+                "initial_sparsity_penalty": p,
+                "sparsity_warmup_steps": SPARSITY_WARMUP_STEPS,
+            }
+            for p in SPARSITY_PENALTIES.p_anneal
+        ]
+    elif architecture in (
+        TrainerType.TOP_K.value,
+        TrainerType.BATCH_TOP_K.value,
+        TrainerType.Matryoshka_BATCH_TOP_K.value,
+        TrainerType.THRESHOLDING_TOP_K.value,
+    ):
+        return [{"k": k, "k_anneal_steps": anneal_end} for k in TARGET_L0s]
+    elif architecture == TrainerType.TEMPORAL_BATCH_TOP_K.value:
+        return [{"k": k, "temporal": "p"} for k in TARGET_L0s]
+    elif architecture == TrainerType.JUMP_RELU.value:
+        return [
+            {"target_l0": l0, "sparsity_warmup_steps": SPARSITY_WARMUP_STEPS}
+            for l0 in TARGET_L0s
+        ]
+    elif architecture == TrainerType.MATCHING_PURSUIT.value:
+        return [{"s": s, "s_anneal_steps": anneal_end} for s in TARGET_L0s]
+    elif architecture in (
+        TrainerType.NESTED_THRESHOLDING_TOP_K.value,
+        TrainerType.STIEFEL_NESTED_THRESHOLDING_TOP_K.value,
+    ):
+        k_values = sorted(TARGET_L0s)
+        k_weights = [1.0 / len(k_values)] * len(k_values)
+        return [{"k_values": k_values, "k_weights": k_weights}]
+    elif architecture == TrainerType.TEMPORAL_MATRYOSHKA_BATCH_TOP_K.value:
+        return [
+            {"k": k, "temp_alpha": ta, "contrastive": c, "temporal": "p"}
+            for k, ta, c in itertools.product(
+                TARGET_L0s, TEMPORAL_TEMP_ALPHAS, TEMPORAL_CONTRASTIVE
+            )
+        ]
+    else:
+        raise ValueError(f"Unknown architecture: {architecture!r}")
+
+
+# ---------------------------------------------------------------------------
 # Sweep generation
 # ---------------------------------------------------------------------------
 
@@ -303,269 +436,34 @@ def get_trainer_configs(
     decay_start_fraction=DECAY_START_FRACTION,
     anneal_end_fraction=K_ANNEAL_END_FRACTION,
 ) -> list[dict]:
-    decay_start = int(steps * decay_start_fraction)
-    anneal_end = int(steps * anneal_end_fraction)
-
     trainer_configs = []
 
-    base_config = {
-        "activation_dim": activation_dim,
-        "steps": steps,
-        "warmup_steps": warmup_steps,
-        "decay_start": decay_start,
-        "device": device,
-        "layer": layer,
-        "lm_name": model_name,
-        "submodule_name": submodule_name,
-    }
-    if TrainerType.P_ANNEAL.value in architectures:
-        for seed, dict_size, learning_rate, sparsity_penalty in itertools.product(
-            seeds, dict_sizes, learning_rates, SPARSITY_PENALTIES.p_anneal
-        ):
-            config = PAnnealTrainerConfig(
-                **base_config,
-                trainer="dictionary_learning.trainers.p_anneal.PAnnealTrainer",
-                dict_class="dictionary_learning.dictionary.AutoEncoder",
-                sparsity_warmup_steps=sparsity_warmup_steps,
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                initial_sparsity_penalty=sparsity_penalty,
-            )
-            trainer_configs.append(config.model_dump())
+    for architecture in architectures:
+        trainer_path, dict_class_path = resolve_architecture(architecture)
+        sweep = get_architecture_sweep_params(architecture, steps)
 
-    if TrainerType.STANDARD.value in architectures:
-        for seed, dict_size, learning_rate, l1_penalty in itertools.product(
-            seeds, dict_sizes, learning_rates, SPARSITY_PENALTIES.standard
-        ):
-            config = StandardTrainerConfig(
-                **base_config,
-                trainer="dictionary_learning.trainers.standard.StandardTrainer",
-                dict_class="dictionary_learning.dictionary.AutoEncoder",
-                sparsity_warmup_steps=sparsity_warmup_steps,
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                l1_penalty=l1_penalty,
-            )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.STANDARD_NEW.value in architectures:
-        for seed, dict_size, learning_rate, l1_penalty in itertools.product(
-            seeds, dict_sizes, learning_rates, SPARSITY_PENALTIES.standard_new
-        ):
-            config = StandardNewTrainerConfig(
-                **base_config,
-                trainer="dictionary_learning.trainers.standard.StandardTrainerAprilUpdate",
-                dict_class="dictionary_learning.dictionary.AutoEncoder",
-                sparsity_warmup_steps=sparsity_warmup_steps,
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                l1_penalty=l1_penalty,
-            )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.GATED.value in architectures:
-        for seed, dict_size, learning_rate, l1_penalty in itertools.product(
-            seeds, dict_sizes, learning_rates, SPARSITY_PENALTIES.gated
-        ):
-            config = GatedTrainerConfig(
-                **base_config,
-                trainer="dictionary_learning.trainers.gdm.GatedSAETrainer",
-                dict_class="dictionary_learning.dictionary.GatedAutoEncoder",
-                sparsity_warmup_steps=sparsity_warmup_steps,
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                l1_penalty=l1_penalty,
-            )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.TOP_K.value in architectures:
-        for seed, dict_size, learning_rate, k in itertools.product(
-            seeds, dict_sizes, learning_rates, TARGET_L0s
-        ):
-            config = TopKTrainerConfig(
-                **base_config,
-                trainer="dictionary_learning.trainers.top_k.TopKTrainer",
-                dict_class="dictionary_learning.trainers.top_k.AutoEncoderTopK",
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                k=k,
-                k_anneal_steps=anneal_end,
-            )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.BATCH_TOP_K.value in architectures:
-        for seed, dict_size, learning_rate, k in itertools.product(
-            seeds, dict_sizes, learning_rates, TARGET_L0s
-        ):
-            config = TopKTrainerConfig(
-                **base_config,
-                trainer="dictionary_learning.trainers.batch_top_k.BatchTopKTrainer",
-                dict_class="dictionary_learning.trainers.batch_top_k.BatchTopKSAE",
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                k=k,
-                k_anneal_steps=anneal_end,
-            )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.Matryoshka_BATCH_TOP_K.value in architectures:
-        for seed, dict_size, learning_rate, k in itertools.product(
-            seeds, dict_sizes, learning_rates, TARGET_L0s
-        ):
-            config = MatryoshkaBatchTopKTrainerConfig(
-                **base_config,
-                trainer="dictionary_learning.trainers.matryoshka_batch_top_k.MatryoshkaBatchTopKTrainer",
-                dict_class="dictionary_learning.trainers.matryoshka_batch_top_k.MatryoshkaBatchTopKSAE",
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                k=k,
-                k_anneal_steps=anneal_end,
-            )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.JUMP_RELU.value in architectures:
-        for seed, dict_size, learning_rate, target_l0 in itertools.product(
-            seeds, dict_sizes, learning_rates, TARGET_L0s
-        ):
-            config = JumpReluTrainerConfig(
-                **base_config,
-                trainer="dictionary_learning.trainers.jumprelu.JumpReluTrainer",
-                dict_class="dictionary_learning.dictionary.JumpReluAutoEncoder",
-                sparsity_warmup_steps=sparsity_warmup_steps,
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                target_l0=target_l0,
-            )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.THRESHOLDING_TOP_K.value in architectures:
-        for seed, dict_size, learning_rate, k in itertools.product(
-            seeds, dict_sizes, learning_rates, TARGET_L0s
-        ):
-            config = TopKTrainerConfig(
-                **base_config,
-                trainer="sae_research.thresholding_sae.ThresholdingTopKTrainer",
-                dict_class="sae_research.thresholding_sae.ThresholdingAutoEncoderTopK",
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                k=k,
-                k_anneal_steps=anneal_end,
-            )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.MATCHING_PURSUIT.value in architectures:
-        for seed, dict_size, learning_rate, s in itertools.product(
+        for seed, dict_size, lr, arch_params in itertools.product(
             seeds,
             dict_sizes,
             learning_rates,
-            TARGET_L0s,
+            sweep,
         ):
-            config = MatchingPursuitTrainerConfig(
-                **base_config,
-                trainer="sae_research.matching_pursuit_sae.MatchingPursuitTrainer",
-                dict_class="sae_research.matching_pursuit_sae.MatchingPursuitAutoEncoder",
-                lr=learning_rate,
+            config = build_trainer_config(
+                trainer=trainer_path,
+                dict_class=dict_class_path,
+                activation_dim=activation_dim,
                 dict_size=dict_size,
                 seed=seed,
-                s=s,
-                s_anneal_steps=anneal_end,
+                lr=lr,
+                steps=steps,
+                device=device,
+                layer=layer,
+                model_name=model_name,
+                submodule_name=submodule_name,
+                warmup_steps=warmup_steps,
+                decay_start_fraction=decay_start_fraction,
+                **arch_params,
             )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.NESTED_THRESHOLDING_TOP_K.value in architectures:
-        for seed, dict_size, learning_rate in itertools.product(
-            seeds, dict_sizes, learning_rates
-        ):
-            k_values = sorted(TARGET_L0s)
-            k_weights = [1.0 / len(k_values)] * len(k_values)
-
-            config = NestedThresholdingTopKTrainerConfig(
-                **base_config,
-                trainer="sae_research.thresholding_sae.NestedThresholdingTopKTrainer",
-                dict_class="sae_research.thresholding_sae.NestedThresholdingAutoEncoderTopK",
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                k_values=k_values,
-                k_weights=k_weights,
-            )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.STIEFEL_NESTED_THRESHOLDING_TOP_K.value in architectures:
-        for seed, dict_size, learning_rate in itertools.product(
-            seeds, dict_sizes, learning_rates
-        ):
-            k_values = sorted(TARGET_L0s)
-            k_weights = [1.0 / len(k_values)] * len(k_values)
-
-            config = NestedThresholdingTopKTrainerConfig(
-                **base_config,
-                trainer="sae_research.stiefel_sae.StiefelNestedThresholdingTopKTrainer",
-                dict_class="sae_research.stiefel_sae.StiefelNestedThresholdingAutoEncoderTopK",
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                k_values=k_values,
-                k_weights=k_weights,
-            )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.TEMPORAL_MATRYOSHKA_BATCH_TOP_K.value in architectures:
-        for (
-            seed,
-            dict_size,
-            learning_rate,
-            k,
-            temp_alpha,
-            contrastive,
-        ) in itertools.product(
-            seeds,
-            dict_sizes,
-            learning_rates,
-            TARGET_L0s,
-            TEMPORAL_TEMP_ALPHAS,
-            TEMPORAL_CONTRASTIVE,
-        ):
-            config = TemporalMatryoshkaBatchTopKTrainerConfig(
-                **base_config,
-                trainer="sae_research.temporal_sae.TemporalMatryoshkaBatchTopKTrainer",
-                dict_class="sae_research.temporal_sae.TemporalMatryoshkaBatchTopKSAE",
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                k=k,
-                temporal="p",
-                contrastive=contrastive,
-                temp_alpha=temp_alpha,
-            )
-            trainer_configs.append(config.model_dump())
-
-    if TrainerType.TEMPORAL_BATCH_TOP_K.value in architectures:
-        for seed, dict_size, learning_rate, k in itertools.product(
-            seeds,
-            dict_sizes,
-            learning_rates,
-            TARGET_L0s,
-        ):
-            config = TemporalBatchTopKTrainerConfig(
-                **base_config,
-                trainer="sae_research.temporal_sae.TemporalBatchTopKTrainer",
-                dict_class="sae_research.temporal_sae.TemporalBatchTopKSAE",
-                lr=learning_rate,
-                dict_size=dict_size,
-                seed=seed,
-                k=k,
-                temporal="p",
-            )
-            trainer_configs.append(config.model_dump())
+            trainer_configs.append(config)
 
     return trainer_configs

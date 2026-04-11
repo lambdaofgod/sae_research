@@ -10,10 +10,6 @@ from contextlib import nullcontext
 import torch as t
 from tqdm import tqdm
 
-from dictionary_learning.dictionary import AutoEncoder
-from dictionary_learning.evaluation import evaluate
-from dictionary_learning.trainers.standard import StandardTrainer
-
 from sae_research.training.config import resolve_class
 from sae_research.training.mlflow_logging import (
     start_trainer_run,
@@ -114,8 +110,7 @@ def trainSAE(
     data,
     trainer_configs: list[dict],
     steps: int,
-    use_mlflow: bool = False,
-    mlflow_parent_run_id: Optional[str] = None,
+    mlflow_experiment: str = "",
     save_steps: Optional[list[int]] = None,
     save_dir: Optional[str] = None,
     log_steps: Optional[int] = None,
@@ -155,13 +150,12 @@ def trainSAE(
         trainers.append(trainer_class(**config))
         trainer_import_paths.append(trainer_path)
 
-    # Start MLflow child runs per trainer
+    # Start MLflow runs per trainer
     mlflow_run_ids = []
-    if use_mlflow:
+    if mlflow_experiment:
         for i, trainer in enumerate(trainers):
             run = start_trainer_run(
-                parent_run_id=mlflow_parent_run_id,
-                trainer_index=i,
+                experiment_name=mlflow_experiment,
                 trainer_config={
                     "trainer": trainer_import_paths[i],
                     **trainer.config,
@@ -189,7 +183,7 @@ def trainSAE(
             }
             try:
                 config["buffer"] = data.config
-            except:
+            except AttributeError:
                 pass
             with open(os.path.join(dir, "config.json"), "w") as f:
                 json.dump(config, f, indent=4)
@@ -220,7 +214,7 @@ def trainSAE(
 
             # logging
             if (
-                (use_mlflow or verbose)
+                (mlflow_experiment or verbose)
                 and log_steps is not None
                 and step % log_steps == 0
             ):
@@ -299,7 +293,7 @@ def trainSAE(
             t.save(checkpoint, os.path.join(save_dir, "ae.pt"))
 
     # Log final artifacts and mark runs as finished
-    if use_mlflow:
+    if mlflow_experiment:
         for run_id, dir in zip(mlflow_run_ids, save_dirs):
             if dir is not None:
                 log_artifacts(run_id, dir)

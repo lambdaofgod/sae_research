@@ -23,7 +23,6 @@ import torch as t
 
 from dictionary_learning.activault_s3_buffer import ActivaultS3ActivationBuffer
 
-from sae_research.training.mlflow_logging import start_sweep_run
 from sae_research.training.train import trainSAE
 from sae_research.training.config import get_trainer_configs
 
@@ -126,20 +125,12 @@ def run_single_architecture(
     """Train one architecture and verify MLflow logging."""
     save_dir = tempfile.mkdtemp(prefix=f"smoke_{architecture}_")
     temporal = "temporal" in architecture
+    experiment_name = f"smoke_test_{architecture}"
 
     try:
         print(f"\n{'=' * 60}")
         print(f"Testing architecture: {architecture}")
         print(f"{'=' * 60}")
-
-        parent_run = start_sweep_run(
-            experiment_name=f"smoke_test_{architecture}",
-            model_name=MODEL_NAME,
-            layers=[LAYER],
-            architectures=[architecture],
-            run_cfg={"num_tokens": 100},
-        )
-        parent_run_id = parent_run.info.run_id
 
         configs = get_trainer_configs(
             architectures=[architecture],
@@ -170,35 +161,42 @@ def run_single_architecture(
             data=stub_buffer,
             trainer_configs=configs,
             steps=5,
-            use_mlflow=True,
-            mlflow_parent_run_id=parent_run_id,
+            mlflow_experiment=experiment_name,
             save_dir=save_dir,
             log_steps=1,
             device="cpu",
         )
-        mlflow.end_run()
 
         # --- Assertions ---
         assert len(run_ids) == 1, f"Expected 1 run ID, got {len(run_ids)}"
-        child_run_id = run_ids[0]
+        run_id = run_ids[0]
 
         client = mlflow.MlflowClient()
 
-        child = client.get_run(child_run_id)
-        assert child.data.tags.get("mlflow.parentRunId") == parent_run_id
-        print("PASS: child run is nested under parent")
+        run = client.get_run(run_id)
+        assert "mlflow.parentRunId" not in run.data.tags, (
+            "parentRunId tag should not exist in flat run model"
+        )
+        print("PASS: no parentRunId tag (flat run model)")
 
-        assert child.data.params.get("trainer_class") == expected_trainer_class
+        assert run.data.params.get("trainer_class") == expected_trainer_class
         print(f"PASS: trainer_class={expected_trainer_class}")
 
-        metric_history = client.get_metric_history(child_run_id, "l0")
+        metric_history = client.get_metric_history(run_id, "l0")
         assert len(metric_history) > 0, "No l0 metrics logged"
         print(f"PASS: metrics logged ({len(metric_history)} l0 data points)")
 
-        artifacts = client.list_artifacts(child_run_id)
+        artifacts = client.list_artifacts(run_id)
         artifact_names = [a.path for a in artifacts]
         assert "ae.pt" in artifact_names, f"ae.pt not in artifacts: {artifact_names}"
         print(f"PASS: artifacts logged ({artifact_names})")
+
+        # Verify experiment name
+        experiment = client.get_experiment(run.info.experiment_id)
+        assert experiment.name == experiment_name, (
+            f"Expected experiment '{experiment_name}', got '{experiment.name}'"
+        )
+        print(f"PASS: experiment name = {experiment_name}")
 
     finally:
         shutil.rmtree(save_dir, ignore_errors=True)

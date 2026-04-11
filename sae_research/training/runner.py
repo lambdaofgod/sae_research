@@ -30,6 +30,7 @@ Example config:
     buffer_tokens: 250000
 """
 
+import itertools
 import os
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -49,7 +50,6 @@ _REQUIRED_KEYS = [
     "random_seeds",
     "dictionary_widths",
     "learning_rates",
-    "mlflow_experiment",
     "eval_num_inputs",
     "remove_bos",
     "max_activation_norm_multiple",
@@ -81,6 +81,7 @@ def main(config: str):
     ds_config.STREAMING_READ_RETRY_INTERVAL = 20  # pyrefly: ignore [bad-assignment]
 
     from sae_research.training.cli_runner import run_sae_training, eval_saes
+    from sae_research.training import config as training_config
     from sae_research.training import utils
 
     start_time = time.time()
@@ -89,57 +90,49 @@ def main(config: str):
     architectures = cfg["architectures"]
     layers = cfg["layers"]
 
-    use_mlflow = cfg.get("mlflow", True)
+    sae_batch_size = training_config.LLM_CONFIG[model_name].sae_batch_size
+    steps = int(cfg["num_tokens"] / sae_batch_size)
 
     all_mlflow_run_ids = []
     for architecture in architectures:
+        trainer_path, dict_class_path = training_config.resolve_architecture(
+            architecture
+        )
+        arch_sweep = training_config.get_architecture_sweep_params(architecture, steps)
+
         for layer in layers:
             save_dir = f"{cfg['save_dir']}_{model_name}_{architecture}".replace(
                 "/", "_"
             )
 
-            mlflow_parent_run_id = None
-            mlflow_parent_run = None
-            if use_mlflow:
-                from sae_research.training.mlflow_logging import start_sweep_run
-
-                mlflow_parent_run = start_sweep_run(
-                    experiment_name=cfg["mlflow_experiment"],
+            for seed, dict_width, lr, arch_params in itertools.product(
+                cfg["random_seeds"],
+                cfg["dictionary_widths"],
+                cfg["learning_rates"],
+                arch_sweep,
+            ):
+                run_id = run_sae_training(
                     model_name=model_name,
-                    layers=[layer],
-                    architectures=[architecture],
-                    run_cfg={
-                        "num_tokens": cfg["num_tokens"],
-                        "save_dir": save_dir,
-                    },
+                    layer=layer,
+                    save_dir=save_dir,
+                    device=cfg["device"],
+                    trainer=trainer_path,
+                    dict_class=dict_class_path,
+                    num_tokens=cfg["num_tokens"],
+                    seed=seed,
+                    dictionary_width=dict_width,
+                    learning_rate=lr,
+                    dry_run=cfg.get("dry_run", False),
+                    mlflow_experiment=cfg.get("mlflow_experiment", ""),
+                    save_checkpoints=cfg.get("save_checkpoints", False),
+                    buffer_tokens=cfg.get("buffer_tokens", 250_000),
+                    mixed_dataset=cfg.get("mixed_dataset", False),
+                    remove_bos=cfg["remove_bos"],
+                    max_activation_norm_multiple=cfg["max_activation_norm_multiple"],
+                    **arch_params,
                 )
-                mlflow_parent_run_id = mlflow_parent_run.info.run_id
-
-            mlflow_run_ids = run_sae_training(
-                model_name=model_name,
-                layer=layer,
-                save_dir=save_dir,
-                device=cfg["device"],
-                architecture=architecture,
-                num_tokens=cfg["num_tokens"],
-                random_seeds=cfg["random_seeds"],
-                dictionary_widths=cfg["dictionary_widths"],
-                learning_rates=cfg["learning_rates"],
-                dry_run=cfg.get("dry_run", False),
-                use_mlflow=use_mlflow,
-                mlflow_parent_run_id=mlflow_parent_run_id,
-                save_checkpoints=cfg.get("save_checkpoints", False),
-                buffer_tokens=cfg.get("buffer_tokens", 250_000),
-                mixed_dataset=cfg.get("mixed_dataset", False),
-                remove_bos=cfg["remove_bos"],
-                max_activation_norm_multiple=cfg["max_activation_norm_multiple"],
-            )
-            all_mlflow_run_ids.extend(mlflow_run_ids)
-
-            if mlflow_parent_run is not None:
-                import mlflow
-
-                mlflow.end_run()
+                if run_id is not None:
+                    all_mlflow_run_ids.append(run_id)
 
     ae_paths = utils.get_nested_folders(cfg["save_dir"])
 

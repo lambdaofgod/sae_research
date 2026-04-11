@@ -1,8 +1,9 @@
 """
 MLflow logging helpers for SAE training.
 
-Provides a thin wrapper around mlflow to handle parent/child run hierarchy
-and standardized param/metric logging for SAE sweeps.
+Provides a thin wrapper around mlflow to handle standardized param/metric
+logging for SAE runs. Each training job creates one flat MLflow run;
+the experiment name groups related runs.
 """
 
 import os
@@ -11,64 +12,45 @@ import mlflow
 import torch as t
 
 
-def start_sweep_run(
-    experiment_name: str,
-    model_name: str,
-    layers: list[int],
-    architectures: list[str],
-    run_cfg: dict,
-) -> mlflow.ActiveRun:
-    """Start a parent MLflow run for a sweep (one runner.py invocation)."""
-    mlflow.set_experiment(experiment_name)
-    run = mlflow.start_run(
-        run_name=f"{model_name}_{'_'.join(architectures)}",
-        tags={
-            "sweep": "true",
-            "model_name": model_name,
-            "layers": str(layers),
-            "architectures": ",".join(architectures),
-        },
-    )
-    # Log sweep-level params
-    safe_cfg = {k: v for k, v in run_cfg.items() if not isinstance(v, (t.Tensor, type))}
-    mlflow.log_params(safe_cfg)
-    return run
+def _build_run_name(trainer_class_name: str, trainer_config: dict) -> str:
+    """Build a descriptive run name from trainer class and key hyperparams.
+
+    E.g. BatchTopKTrainer_k64_d16384_lr0.0001_s0
+    """
+    parts = [trainer_class_name]
+
+    # Architecture-specific sparsity param (pick the one that's present)
+    for key in ("k", "target_l0", "l1_penalty", "initial_sparsity_penalty", "s"):
+        if key in trainer_config:
+            val = trainer_config[key]
+            if isinstance(val, float) and val == int(val):
+                val = int(val)
+            parts.append(f"{key}{val}")
+            break
+
+    if "dict_size" in trainer_config:
+        parts.append(f"d{trainer_config['dict_size']}")
+    if "lr" in trainer_config:
+        parts.append(f"lr{trainer_config['lr']}")
+    if "seed" in trainer_config:
+        parts.append(f"s{trainer_config['seed']}")
+
+    return "_".join(parts)
 
 
 def start_trainer_run(
-    parent_run_id: str | None,
-    trainer_index: int,
+    experiment_name: str,
     trainer_config: dict,
 ) -> mlflow.entities.Run:
-    """Start a child MLflow run for one trainer within a sweep.
+    """Start a flat MLflow run for one trainer.
+
+    Creates a run in the given experiment. All config keys are logged as
+    params (no hardcoded allowlist).
 
     Returns an mlflow.entities.Run (not ActiveRun) — the run stays in
     RUNNING status until end_trainer_run() is called.
     """
     client = _get_client()
-
-    param_keys = [
-        "activation_dim",
-        "dict_size",
-        "seed",
-        "lr",
-        "layer",
-        "lm_name",
-        "submodule_name",
-        "steps",
-        "warmup_steps",
-        "decay_start",
-        # Architecture-specific
-        "k",
-        "l1_penalty",
-        "target_l0",
-        "initial_sparsity_penalty",
-        "sparsity_warmup_steps",
-        "k_values",
-        "s",
-        "auxk_alpha",
-        "threshold_beta",
-    ]
 
     trainer_path = str(trainer_config.get("trainer", ""))
     trainer_class_name = trainer_path.rsplit(".", 1)[-1] if trainer_path else ""
@@ -76,33 +58,37 @@ def start_trainer_run(
     dict_class_path = str(trainer_config.get("dict_class", ""))
     dict_class_name = dict_class_path.rsplit(".", 1)[-1] if dict_class_path else ""
 
-    run_name = f"trainer_{trainer_index}_{trainer_class_name}"
+    run_name = _build_run_name(trainer_class_name, trainer_config)
 
-    experiment_id = "0"
-    if parent_run_id:
-        parent_run = client.get_run(parent_run_id)
-        experiment_id = parent_run.info.experiment_id
+    experiment = client.get_experiment_by_name(experiment_name)
+    if experiment is None:
+        experiment_id = client.create_experiment(experiment_name)
+    else:
+        experiment_id = experiment.experiment_id
 
     run = client.create_run(
         experiment_id=experiment_id,
         run_name=run_name,
         tags={
-            "trainer_index": str(trainer_index),
             "trainer_class": trainer_class_name,
             "dict_class": dict_class_name,
-            "mlflow.parentRunId": parent_run_id or "",
         },
     )
 
+    # Log all config keys as params (skip non-serializable values)
     params = {}
-    for key in param_keys:
-        if key in trainer_config:
-            val = trainer_config[key]
-            if isinstance(val, t.Tensor):
-                val = val.item()
-            elif isinstance(val, list):
-                val = str(val)
-            params[key] = val
+    for key, val in trainer_config.items():
+        if isinstance(val, t.Tensor):
+            val = val.item()
+        elif isinstance(val, type):
+            val = f"{val.__module__}.{val.__qualname__}"
+        elif isinstance(val, list):
+            val = str(val)
+        elif isinstance(val, (int, float, str, bool)):
+            pass
+        else:
+            continue
+        params[key] = val
 
     params["trainer_class"] = trainer_class_name
     params["dict_class"] = dict_class_name

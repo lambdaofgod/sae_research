@@ -16,7 +16,6 @@ import tempfile
 import mlflow
 import torch as t
 
-from sae_research.training.mlflow_logging import start_sweep_run
 from sae_research.training.train import trainSAE
 from sae_research.training.config import get_trainer_configs
 from sae_research.eval.sae_wrapper import load_sae_for_eval
@@ -34,10 +33,11 @@ from smoke_tests.smoke_test_training import mlflow_backend
 MODEL_NAME = "EleutherAI/pythia-70m-deduped"
 ACTIVATION_DIM = 512
 LAYER = 3
+EXPERIMENT_NAME = "smoke_test_eval"
 
 
-def train_tiny_sae(save_dir: str, parent_run_id: str) -> str:
-    """Train a tiny SAE and return the child MLflow run ID."""
+def train_tiny_sae(save_dir: str) -> str:
+    """Train a tiny SAE and return the MLflow run ID."""
     configs = get_trainer_configs(
         architectures=["batch_top_k"],
         learning_rates=[1e-4],
@@ -64,13 +64,11 @@ def train_tiny_sae(save_dir: str, parent_run_id: str) -> str:
         data=dummy_data(),
         trainer_configs=configs,
         steps=5,
-        use_mlflow=True,
-        mlflow_parent_run_id=parent_run_id,
+        mlflow_experiment=EXPERIMENT_NAME,
         save_dir=save_dir,
         log_steps=1,
         device="cpu",
     )
-    mlflow.end_run()
 
     assert len(mlflow_run_ids) == 1
     return mlflow_run_ids[0]
@@ -86,24 +84,14 @@ def run_smoke_test(tracking_uri: str):
 
         # --- Step 1: Train a tiny SAE ---
         print("\n=== Step 1: Training tiny SAE ===")
-        parent_run = start_sweep_run(
-            experiment_name="smoke_test_eval",
-            model_name=MODEL_NAME,
-            layers=[LAYER],
-            architectures=["batch_top_k"],
-            run_cfg={"num_tokens": 100},
-        )
-        parent_run_id = parent_run.info.run_id
-        child_run_id = train_tiny_sae(save_dir, parent_run_id)
-        print(f"Training done. Child run: {child_run_id}")
+        run_id = train_tiny_sae(save_dir)
+        print(f"Training done. Run: {run_id}")
 
         # --- Step 2: Pull SAE artifacts from MLflow ---
         print("\n=== Step 2: Pulling SAE from MLflow ===")
         artifact_dir = tempfile.mkdtemp(prefix="eval_smoke_artifacts_")
         for artifact_name in ["ae.pt", "config.json"]:
-            local_path = client.download_artifacts(
-                child_run_id, artifact_name, artifact_dir
-            )
+            local_path = client.download_artifacts(run_id, artifact_name, artifact_dir)
             print(f"Downloaded: {local_path}")
 
         # --- Step 3: Load SAE and wrap for sae_bench ---
@@ -142,18 +130,18 @@ def run_smoke_test(tracking_uri: str):
         assert len(metrics) > 0, "No metrics extracted"
 
         log_eval_to_mlflow(
-            run_id=child_run_id,
+            run_id=run_id,
             metrics=metrics,
             tags={
                 "experiment_name": "smoke_test",
                 "eval_type": "core",
             },
         )
-        print(f"Logged {len(metrics)} metrics to run {child_run_id}")
+        print(f"Logged {len(metrics)} metrics to run {run_id}")
 
         # --- Step 6: Verify metrics and tags in MLflow ---
         print("\n=== Step 6: Verification ===")
-        run = client.get_run(child_run_id)
+        run = client.get_run(run_id)
         for key in ["core_l0", "core_explained_variance"]:
             assert key in run.data.metrics, (
                 f"Expected metric {key} not found. Got: {list(run.data.metrics.keys())}"
