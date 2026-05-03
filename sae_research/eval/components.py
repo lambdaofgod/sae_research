@@ -11,6 +11,33 @@ experiment name tag so runs are always attributable.
 
 import mlflow
 import sae_bench.evals.core.main as core_eval_module
+from transformer_lens import HookedTransformer as _HookedTransformer
+from transformer_lens.model_bridge import TransformerBridge
+
+
+class _BridgeAwareHookedTransformer:
+    """Drop-in replacement for sae-bench's HookedTransformer reference.
+
+    Tries the legacy OFFICIAL_MODEL_NAMES path first; falls back to
+    TransformerBridge for models the legacy registry doesn't know
+    (e.g. Qwen3.5). Bridge default semantics (raw HF weights) match
+    HookedTransformer.from_pretrained_no_processing, which is what
+    sae-bench calls.
+    """
+
+    @staticmethod
+    def from_pretrained_no_processing(model_name, device, dtype, **kwargs):
+        try:
+            return _HookedTransformer.from_pretrained_no_processing(
+                model_name, device=device, dtype=dtype, **kwargs
+            )
+        except ValueError:
+            return TransformerBridge.boot_transformers(
+                model_name, device=device, dtype=dtype
+            )
+
+
+core_eval_module.HookedTransformer = _BridgeAwareHookedTransformer  # pyrefly: ignore [bad-assignment]
 
 
 def log_eval_to_mlflow(
