@@ -365,7 +365,6 @@ def cli_main(
     random_seeds: list[int] = [0],
     dictionary_widths: list[int] = [16384],
     learning_rates: list[float] = [0.0001],
-    eval_num_inputs: int = 200,
     device: str = "cuda:0",
     dry_run: bool = False,
     save_checkpoints: bool = False,
@@ -387,6 +386,10 @@ def cli_main(
             --architecture=batch_top_k \\
             --mlflow_experiment=my_sweep
     """
+    from sae_research.training.mlflow_logging import configure_tracking_uri
+
+    configure_tracking_uri()
+
     if hf_repo_id:
         assert huggingface_hub.repo_exists(repo_id=hf_repo_id, repo_type="model")
 
@@ -432,19 +435,6 @@ def cli_main(
         )
         if run_id is not None:
             mlflow_run_ids.append(run_id)
-
-    ae_paths = utils.get_nested_folders(save_dir)
-
-    eval_saes(
-        model_name,
-        ae_paths,
-        eval_num_inputs,
-        device,
-        overwrite_prev_results=True,
-        mlflow_run_ids=mlflow_run_ids,
-        remove_bos=remove_bos,
-        max_activation_norm_multiple=max_activation_norm_multiple,
-    )
 
     print(f"Total time: {time.time() - start_time}")
 

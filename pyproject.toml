@@ -60,4 +60,6 @@ packages = ["sae_research"]
 dictionary-learning = { git = "https://github.com/saprmarks/dictionary_learning", rev = "1d2737a" }
 
 [tool.uv.workspace]
-members = ["ARENA_tutorials"]
+members = [
+    "ARENA_tutorials"
+]

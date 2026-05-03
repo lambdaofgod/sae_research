@@ -384,10 +384,18 @@ def get_architecture_sweep_params(architecture: str, steps: int) -> list[dict]:
     elif architecture in (
         TrainerType.TOP_K.value,
         TrainerType.BATCH_TOP_K.value,
-        TrainerType.Matryoshka_BATCH_TOP_K.value,
         TrainerType.THRESHOLDING_TOP_K.value,
     ):
         return [{"k": k, "k_anneal_steps": anneal_end} for k in TARGET_L0s]
+    elif architecture == TrainerType.Matryoshka_BATCH_TOP_K.value:
+        return [
+            {
+                "k": k,
+                "k_anneal_steps": anneal_end,
+                "group_fractions": [1 / 32, 1 / 16, 1 / 8, 1 / 4, (1 / 2) + (1 / 32)],
+            }
+            for k in TARGET_L0s
+        ]
     elif architecture == TrainerType.TEMPORAL_BATCH_TOP_K.value:
         return [{"k": k, "temporal": "p"} for k in TARGET_L0s]
     elif architecture == TrainerType.JUMP_RELU.value:
@@ -406,7 +414,13 @@ def get_architecture_sweep_params(architecture: str, steps: int) -> list[dict]:
         return [{"k_values": k_values, "k_weights": k_weights}]
     elif architecture == TrainerType.TEMPORAL_MATRYOSHKA_BATCH_TOP_K.value:
         return [
-            {"k": k, "temp_alpha": ta, "contrastive": c, "temporal": "p"}
+            {
+                "k": k,
+                "temp_alpha": ta,
+                "contrastive": c,
+                "temporal": "p",
+                "group_fractions": [0.2, 0.8],
+            }
             for k, ta, c in itertools.product(
                 TARGET_L0s, TEMPORAL_TEMP_ALPHAS, TEMPORAL_CONTRASTIVE
             )

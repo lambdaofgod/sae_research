@@ -10,6 +10,7 @@ Usage:
     uv run python smoke_tests/smoke_test_eval.py --backend=local    # uses local server
 """
 
+import os
 import shutil
 import tempfile
 
@@ -79,6 +80,7 @@ def run_smoke_test(tracking_uri: str):
     eval_output_dir = tempfile.mkdtemp(prefix="eval_smoke_results_")
 
     try:
+        os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
         mlflow.set_tracking_uri(tracking_uri)
         client = mlflow.MlflowClient()
 

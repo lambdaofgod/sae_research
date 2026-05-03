@@ -203,6 +203,7 @@ def run_single_architecture(
 
 
 def run_smoke_test(tracking_uri: str):
+    os.environ["MLFLOW_TRACKING_URI"] = tracking_uri
     mlflow.set_tracking_uri(tracking_uri)
 
     run_single_architecture(tracking_uri, "batch_top_k", "BatchTopKTrainer")

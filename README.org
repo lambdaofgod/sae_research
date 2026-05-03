@@ -24,6 +24,20 @@ Apply sparse coding / dictionary learning algorithms to pretrained SAE decoder m
 - =experiments/= — Subdirectories for specific experiments (sae_bench, embedder_sae, SSC, etc.)
 - =../forks/dictionary_learning_demo/= — Fork of adamkarvonen/dictionary_learning_demo with custom trainers
 
+* Running training
+
+All training requires S3 credentials from the K8s cluster. Wrap every training
+command with =scripts/with-k8s-env.sh= — it reads credentials from the cluster
+and starts port-forwards for S3 and MLflow:
+
+#+begin_src sh
+bash scripts/with-k8s-env.sh uv run python -m sae_research.training.runner --config configs/temporal_sae_small.yaml
+#+end_src
+
+Without the wrapper you'll get a =ValueError= about missing =AWS_ACCESS_KEY_ID=.
+Configs are in =configs/=; use =temporal_sae_small.yaml= (20M tokens) to smoke-test
+and =temporal_sae.yaml= (200M tokens) for a full run.
+
 * Theory and ideas
 
 See [[file:SAE_EXPERIMENTS.org][SAE_EXPERIMENTS.org]]

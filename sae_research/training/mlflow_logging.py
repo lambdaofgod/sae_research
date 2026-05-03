@@ -7,9 +7,48 @@ the experiment name groups related runs.
 """
 
 import os
+import sys
+import warnings
 
 import mlflow
 import torch as t
+
+
+_LOCAL_SENTINEL = "local"
+_LOCAL_URI = "file:./mlruns"
+
+
+def configure_tracking_uri() -> None:
+    """Validate MLFLOW_TRACKING_URI and apply local-mode resolution.
+
+    Required at training entry points. Without this guard MLflow silently
+    falls back to a local file store when the env var is unset, so runs
+    disappear from the cluster UI without warning.
+
+    - Unset/empty: print a clear error and exit.
+    - "local": resolve to a local file store and warn.
+    - Anything else: pass through; MLflow already reads it from the env.
+    """
+    uri = os.environ.get("MLFLOW_TRACKING_URI", "").strip()
+
+    if not uri:
+        sys.stderr.write(
+            "ERROR: MLFLOW_TRACKING_URI is not set.\n"
+            "Training will not start without an explicit choice:\n"
+            "  - Set MLFLOW_TRACKING_URI to the cluster MLflow URI\n"
+            "    (e.g. http://localhost:8085 — scripts/with-k8s-env.sh exports it).\n"
+            "  - Set MLFLOW_TRACKING_URI=local to opt into local file storage.\n"
+        )
+        sys.exit(1)
+
+    if uri == _LOCAL_SENTINEL:
+        warnings.warn(
+            "MLFLOW_TRACKING_URI=local: runs will be stored in a local file "
+            "store and will not appear in the cluster MLflow UI.",
+            stacklevel=2,
+        )
+        mlflow.set_tracking_uri(_LOCAL_URI)
+        os.environ["MLFLOW_TRACKING_URI"] = _LOCAL_URI
 
 
 def _build_run_name(trainer_class_name: str, trainer_config: dict) -> str:

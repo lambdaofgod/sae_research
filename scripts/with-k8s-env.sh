@@ -22,6 +22,11 @@ export AWS_DEFAULT_REGION=$(kubectl get secret "$SECRET_NAME" -o jsonpath='{.dat
 export AWS_ENDPOINT_URL="http://localhost:3900"
 export MLFLOW_S3_ENDPOINT_URL="http://localhost:3900"
 
+# MLflow tracking server — cluster MLflow via local port-forward.
+# Without this, clients fall back to local file store and runs don't show
+# up in the cluster UI.
+export MLFLOW_TRACKING_URI="http://localhost:8085"
+
 # ── Ensure port-forwards are running ──────────────────────────────────────
 ensure_port_forward() {
     local svc="$1" local_port="$2" remote_port="$3" ns="${4:-default}"

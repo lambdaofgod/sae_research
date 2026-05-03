@@ -566,6 +566,40 @@ uv run python -m sae_research.training.runner \
 =TemporalActivationBuffer= (for live LLM forward passes, mode "r") uses nnsight.
 Our runner uses transformers =AutoModelForCausalLM=. Activault path only for now.
 
+* DONE [#A] Require explicit MLFLOW_TRACKING_URI            :code:training:mlflow:safety:
+:PROPERTIES:
+:EFFORT: small
+:END:
+
+If =MLFLOW_TRACKING_URI= is not set, MLflow silently falls back to a local
+file store (=./mlruns/= or =mlflow.db=). Training runs to completion but
+nothing appears in the cluster MLflow UI — the user has to dig through local
+files to find them, or worse, never realizes the runs went somewhere unexpected.
+
+This bit on 2026-04-27: a temporal SAE training run was launched via
+=scripts/with-k8s-env.sh=, but the wrapper didn't export =MLFLOW_TRACKING_URI=.
+Logs went to the local store while the user was watching the cluster UI on
+=:8085=. The wrapper has since been patched, but the underlying fragility
+remains — any other entry point that forgets it hits the same trap.
+
+Fix: =runner.py= (and =cli_runner.cli_main=) read =MLFLOW_TRACKING_URI= and
+treat it as required input.
+
+- Unset or empty -> exit with a clear error before any model loading or S3
+  access. Mention both options: set to a real URI (e.g. =http://localhost:8085=)
+  or set to ="local"= to opt into local file storage.
+- ="local"= -> resolve to the local file store, print a warning that runs
+  will not appear in the cluster UI.
+- Anything else -> pass through to MLflow as the tracking URI.
+
+Acceptance:
+- Running the runner without =MLFLOW_TRACKING_URI= exits before doing any work,
+  with an error that names both fixes.
+- =MLFLOW_TRACKING_URI=local= runs successfully against a local file store.
+- =MLFLOW_TRACKING_URI=http://localhost:8085= behaves as today.
+- Smoke tests updated to set the env var (either to ="local"= or to whatever
+  local server they spin up).
+
 * TODO [#A] Self-contained SAE artifacts (mlflow.pyfunc)  :code:training:eval:mlflow:
 :PROPERTIES:
 :EFFORT: medium
@@ -771,7 +805,7 @@ with direct =from sae_research.training.cli_runner import cli_main= call.
 KFP component now parses layers/architectures strings into lists and calls
 =cli_main()= directly. Pipeline compiles successfully.
 
-** TODO Delete KFP training and eval pipeline code
+** DONE Delete KFP training and eval pipeline code
 Dagster replaces KFP for training and eval orchestration. The KFP training
 pipeline is already broken (=cli_main()= signature changed — =mlflow= bool
 param removed). Delete:
@@ -788,7 +822,7 @@ Also remove the DONE tasks that document building these pipelines (lines
 754-772), and the "Argo/KFP ServiceMonitors" TODO if it only applies to
 training/eval (check first — Argo monitors may still matter for activault).
 
-** TODO Remove legacy eval_saes from training runners
+** DONE Remove legacy eval_saes from training runners
 =cli_main()= and =runner.py= both call =eval_saes()= inline after training.
 This couples training and eval in one process and reads SAEs from local disk
 paths that are ephemeral in K8s. In the Dagster world, eval is a separate

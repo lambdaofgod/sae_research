@@ -35,6 +35,8 @@ grafana:
       searchNamespace: ALL
     datasources:
       enabled: true
+  initChownData:
+    enabled: false
   persistence:
     enabled: true
     size: 10Gi

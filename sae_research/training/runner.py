@@ -50,7 +50,6 @@ _REQUIRED_KEYS = [
     "random_seeds",
     "dictionary_widths",
     "learning_rates",
-    "eval_num_inputs",
     "remove_bos",
     "max_activation_norm_multiple",
 ]
@@ -73,6 +72,10 @@ def main(config: str):
     Args:
         config: Path to YAML config file.
     """
+    from sae_research.training.mlflow_logging import configure_tracking_uri
+
+    configure_tracking_uri()
+
     cfg = load_config(config)
 
     from datasets import config as ds_config
@@ -80,9 +83,8 @@ def main(config: str):
     ds_config.STREAMING_READ_MAX_RETRIES = 100  # pyrefly: ignore [bad-assignment]
     ds_config.STREAMING_READ_RETRY_INTERVAL = 20  # pyrefly: ignore [bad-assignment]
 
-    from sae_research.training.cli_runner import run_sae_training, eval_saes
+    from sae_research.training.cli_runner import run_sae_training
     from sae_research.training import config as training_config
-    from sae_research.training import utils
 
     start_time = time.time()
 
@@ -133,17 +135,6 @@ def main(config: str):
                 )
                 if run_id is not None:
                     all_mlflow_run_ids.append(run_id)
-
-    ae_paths = utils.get_nested_folders(cfg["save_dir"])
-
-    eval_saes(
-        model_name,
-        ae_paths,
-        cfg["eval_num_inputs"],
-        cfg["device"],
-        overwrite_prev_results=True,
-        mlflow_run_ids=all_mlflow_run_ids,
-    )
 
     print(f"Total time: {time.time() - start_time}")
 
