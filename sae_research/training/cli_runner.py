@@ -159,7 +159,7 @@ def run_sae_training(
             qwen_system_prompt_to_remove = None
 
             generator = hf_mixed_dataset_to_generator(
-                tokenizer,
+                tokenizer,  # pyrefly: ignore [bad-argument-type]
                 system_prompt_to_remove=qwen_system_prompt_to_remove,
                 sequence_pack_pretrain=True,
                 system_prompt_removal_freq=0.0,
@@ -167,7 +167,7 @@ def run_sae_training(
             )
         else:
             generator = hf_sequence_packing_dataset_to_generator(
-                tokenizer,
+                tokenizer,  # pyrefly: ignore [bad-argument-type]
                 min_chars=context_length * 4,
             )
 

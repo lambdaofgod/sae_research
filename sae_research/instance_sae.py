@@ -232,7 +232,7 @@ def load_from_sae_lens(
 
     sae.W_dec.data = sae_lens_sae.W_dec.to(device)  # pyrefly: ignore [missing-attribute]
     sae.b_dec.data = sae_lens_sae.b_dec.to(device)  # pyrefly: ignore [missing-attribute]
-    sae.b_enc.data = sae_lens_sae.b_enc.to(device)  # pyrefly: ignore [missing-attribute]
+    sae.b_enc.data = sae_lens_sae.b_enc.to(device)  # pyrefly: ignore [missing-attribute, bad-assignment]
     return sae
 
 

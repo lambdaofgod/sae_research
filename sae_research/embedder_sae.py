@@ -4,7 +4,7 @@ from sentence_transformers.sparse_encoder import (
     SparseEncoderTrainer,
     losses,
 )
-from sentence_transformers.sparse_encoder.models import SparseAutoEncoder
+from sentence_transformers.sparse_encoder.modules import SparseAutoEncoder
 from sentence_transformers import SentenceTransformer
 import torch.nn as nn
 import torch.nn.functional as F

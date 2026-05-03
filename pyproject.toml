@@ -22,14 +22,13 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pandas>=2.3.2",
     "pyamg>=5.3.0",
-    "sae-bench==0.4.2",
-    "sae-lens==5.4.0",
+    "sae-bench==0.6.0",
+    "sae-lens==6.43.0",
     "scikit-learn>=1.7.1",
     "seaborn>=0.13.2",
     "sentence-transformers>=5.1.2",
     "sympy>=1.14.0",
     "tabulate>=0.9.0",
-    "transformer-lens>=2.16.1",
     "einops>=0.7.0",
     "jaxtyping>=0.2.0",
     "zstandard>=0.22.0",
@@ -40,6 +39,7 @@ dependencies = [
     "kfp-kubernetes>=2.16.0",
     "ipykernel>=7.0.1",
     "pydantic>=2.11.10",
+    "transformers==5.7.0",
 ]
 
 [dependency-groups]
@@ -55,6 +55,14 @@ find_sae_bench_models = "scripts.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sae_research"]
+
+[tool.uv]
+# sae-probes 0.4.0 caps transformer-lens<3.0.0, but TL 2.x uses
+# GPTNeoXConfig.rotary_pct which transformers 5 removed. TL 3.x is
+# API-compatible with sae-probes' usage at runtime, so override.
+override-dependencies = [
+    "transformer-lens>=3.0.0",
+]
 
 [tool.uv.sources]
 dictionary-learning = { git = "https://github.com/saprmarks/dictionary_learning", rev = "1d2737a" }
