@@ -1,10 +1,10 @@
 #+title: Tasks
 
-* TODO Fix ~ResilientS3RCache~ shutdown deadlock (root cause)
+* TODO Fix ~ResilientS3RCache~ shutdown deadlock
 
 **Root cause identified** (PID 783351, 5 days hung, 3.5 GB VRAM held):
 
-The runner's main thread is stuck in
+The runner's main thread was stuck in
 ~dictionary_learning.activault_s3_buffer.S3RCache._stop_downloading()~
 (line 524-542):
 
@@ -19,41 +19,113 @@ for p in self._running_processes:
     p.join()
 #+END_SRC
 
-This is a *cooperative-only* shutdown: it sets a stop flag and polls.
-But the worker subprocesses are async tasks blocked inside
-~aiohttp~ reads or shared-memory queue waits — they never see the
-stop flag because they're parked in syscalls. The wait loop spins
-forever; ~p.join()~ is never reached.
+Cooperative-only shutdown: sets a stop flag and polls. Worker
+subprocesses are async tasks blocked inside ~aiohttp~ reads / shared-
+memory queue waits — they never see the stop flag because they're
+parked in syscalls. Loop spins forever; ~p.join()~ is never reached.
+GPU VRAM is held as a side effect — while the main thread is parked,
+Python references to the model / SAE / buffer never release, so CUDA
+tensors stay live in the allocator.
 
-Evidence from PID 783351:
-- main-thread wchan: ~hrtimer_nanosleep~ (the ~time.sleep(0.25)~)
-- 80 worker threads in ~futex_wait_queue~ (idle daemons, normal)
-- 9+ multiprocessing children alive 5+ days (the S3 download workers)
-- 49 open pipes (worker IPC), 1 socket, 0 TCP connections
-- ~/proc/<pid>/io~: 87 GB written, ~9 GB read — work was real and finished
+Evidence from PID 783351: main-thread wchan ~hrtimer_nanosleep~,
+9+ multiprocessing children alive 5+ days, 49 open pipes,
+87 GB written / 9 GB read.
 
-GPU VRAM is held *as a side effect*: while the main thread is parked
-in this shutdown loop, Python references to the model / SAE / buffer
-are never released, so CUDA tensors stay live in the allocator.
+** DONE Implementation
 
-** Fix options
+CLOSED: ~sae_research/training/resilient_s3_cache.py~ now:
 
-1. **Hard timeout + ~terminate()~** in our ~ResilientS3RCache~:
-   override ~_stop_downloading~ to wait at most N seconds, then
-   ~p.terminate()~ + ~p.kill()~ stragglers.
-2. **Daemonize the workers** (~Process(daemon=True)~ in
-   ~ResilientS3RCache.__iter__~) so they die with the parent on
-   normal interpreter exit. Doesn't fix the explicit-cleanup path
-   but rescues the "user Ctrl-C / process exits" case.
+1. Overrides ~_stop_downloading~ with a hard timeout: 5 s cooperative
+   wait → log a warning → ~p.terminate()~ on stragglers → 5 s grace
+   → ~p.kill()~ on any survivor. Constants ~_COOPERATIVE_SHUTDOWN_TIMEOUT_S~
+   and ~_TERMINATE_GRACE_S~ named in the file.
+2. Sets ~daemon=True~ on the worker ~Process(...)~ in ~__iter__~ so
+   workers die with the parent on Ctrl-C / abnormal exit.
 
-Do (1) + (2) — belt and suspenders.
+Pyrefly clean.
+
+** TODO Activault-based training smoke test
+
+The existing ~smoke_tests/smoke_test_training.py~ uses a
+~StubActivationBuffer~ that bypasses ~ResilientS3RCache~ entirely —
+the cache shutdown path is never exercised, so the existing smoke
+suite would pass even if the deadlock fix were broken.
+
+Add ~smoke_tests/smoke_test_activault_training.py~. Drives
+~run_sae_training~ down its Activault-path branch
+(~cli_runner.py:131~), which constructs ~ResilientS3RCache~ +
+~ActivaultS3ActivationBuffer~ — the path that hung on PID 783351.
+
+*** Entry point
+
+- ~main()~ is wrapped with ~fire.Fire~ so it's invokable as
+  ~uv run python smoke_tests/smoke_test_activault_training.py
+  [--cache=<name>]~.
+- ~--cache~ is *optional*. Selects which activault cache (S3 prefix)
+  to read activations from.
+
+*** Cache selection
+
+- If ~--cache~ is given: use it directly.
+- If omitted: list all caches available in activault, sort alphabetically,
+  pick the first. Log which one was picked *and* the other available
+  names so the user can re-run with ~--cache=<other>~ if they wanted a
+  different one. If zero caches available, error out pointing at the
+  activault setup docs (TODO: pick the right link).
+
+*** Error handling — point at ~with-k8s-env.sh~
+
+The activault S3 API and MLflow are reached via K8s port-forwards
+configured by ~scripts/with-k8s-env.sh~ (sets ~AWS_*~,
+~AWS_ENDPOINT_URL~, ~MLFLOW_TRACKING_URI~, plus ensures port-forwards
+are running). When run *without* that wrapper, the symptoms are
+~botocore.exceptions.NoCredentialsError~ /
+~EndpointConnectionError~ / ~ClientError~ on the first S3 list/get,
+and an unhelpful traceback.
+
+Catch those at the top level and re-raise (or print + exit) with a
+message like:
+
+#+BEGIN_SRC
+Couldn't reach activault S3 (<original error>).
+This usually means K8s port-forwards / S3 credentials aren't set.
+Re-run inside the helper:
+    bash scripts/with-k8s-env.sh uv run python smoke_tests/smoke_test_activault_training.py [...]
+#+END_SRC
+
+Apply the same wrapping for MLflow connection errors if MLflow is in
+the smoke path.
+
+*** Test body
+
+- Trains a tiny SAE for a handful of steps so the cache actually
+  spawns workers, downloads at least one chunk, and reaches
+  ~_stop_downloading~ on exit.
+- Runs as a *subprocess* with a deadline (e.g. ~timeout=120 s~) so a
+  regressed shutdown deadlock surfaces as a subprocess timeout, not
+  a frozen pytest.
+- After the subprocess exits, asserts:
+  - exit code 0 within the deadline,
+  - no descendants of the run's pgid survive (no
+    ~multiprocessing.spawn_main~ leftovers),
+  - GPU memory delta back to zero.
+
+*** Open questions
+
+- Should this also assert that the
+  ~"S3 cache shutdown: N worker(s) ignored stop flag"~ warning is
+  *not* emitted on a clean run, and *is* emitted when we deliberately
+  wedge a worker (e.g. by monkey-patching the worker loop to ignore
+  ~self._stop.value~)? That would turn this from "smoke test" into
+  "regression test for the actual fix" — probably worth doing as a
+  follow-up subtask once the basic smoke is green.
 
 ** Operational note
 
-Until fixed, audit before launching long jobs:
+Until verified on a real run, audit before launching long jobs:
 ~ps -ef | grep training.runner~ and kill stragglers — they leak GPU
-memory and break later eval runs (this is exactly what just blocked
-the Qwen-Scope comparison).
+memory and break later eval runs (this is exactly what blocked the
+Qwen-Scope comparison).
 
 * TODO Support Qwen 3.5 models (and Qwen-Scope SAEs) in the eval pipeline
 
