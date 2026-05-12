@@ -1,0 +1,56 @@
+{{- if .Values.mlflow.enabled }}
+{{- $secretName := printf "%s-mlflow-db" (include "activault.fullname" .) -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "activault.fullname" . }}-postgres
+  labels:
+    app: {{ include "activault.fullname" . }}-postgres
+spec:
+  serviceName: {{ include "activault.fullname" . }}-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "activault.fullname" . }}-postgres
+  template:
+    metadata:
+      labels:
+        app: {{ include "activault.fullname" . }}-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: {{ $secretName }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "mlflow"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "activault.fullname" . }}-postgres
+spec:
+  selector:
+    app: {{ include "activault.fullname" . }}-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+{{- end }}

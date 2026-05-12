@@ -51,7 +51,9 @@ class NestedThresholdingTopKSAE(base_sae.BaseSAE):
         # Note: decoder.weight in nn.Linear is (out_features, in_features) = (d_in, d_sae)
         # But W_dec should be (d_sae, d_in)
         # Create as parameters so they're recognized by nn.Module
-        self.W_dec = nn.Parameter(nested_sae.decoder.weight.T.detach())  # Transpose to get (d_sae, d_in)
+        self.W_dec = nn.Parameter(
+            nested_sae.decoder.weight.T.detach()
+        )  # Transpose to get (d_sae, d_in)
         self.b_dec = nn.Parameter(nested_sae.b_dec.detach())
 
         # For compatibility, create W_enc and b_enc (even though thresholding uses decoder.T)
@@ -65,15 +67,18 @@ class NestedThresholdingTopKSAE(base_sae.BaseSAE):
 
         # Configure metadata
         self.cfg = custom_sae_config.CustomSAEConfig(
-            model_name, d_in=d_in, d_sae=d_sae,
-            hook_name=hook_name, hook_layer=hook_layer
+            model_name,
+            d_in=d_in,
+            d_sae=d_sae,
+            hook_name=hook_name,
+            hook_layer=hook_layer,
         )
-        self.cfg.dtype = str(dtype).replace('torch.', '')
+        self.cfg.dtype = str(dtype).replace("torch.", "")
         self.cfg.architecture = "nested_topk"
 
         # Add training metadata from config if available
-        trainer_config = config_dict.get('trainer', {})
-        self.cfg.training_tokens = trainer_config.get('training_tokens', 0)
+        trainer_config = config_dict.get("trainer", {})
+        self.cfg.training_tokens = trainer_config.get("training_tokens", 0)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -117,7 +122,7 @@ class NestedThresholdingTopKSAE(base_sae.BaseSAE):
         single_k_sae = NestedThresholdingAutoEncoderTopK(
             activation_dim=self.nested_sae.activation_dim,
             dict_size=self.nested_sae.dict_size,
-            k_values=[k]  # Only use this single k value
+            k_values=[k],  # Only use this single k value
         )
 
         # Copy weights
@@ -135,7 +140,7 @@ class NestedThresholdingTopKSAE(base_sae.BaseSAE):
             device=self.device,
             dtype=self.dtype,
             hook_name=self.cfg.hook_name,
-            config_dict=self.config_dict
+            config_dict=self.config_dict,
         )
 
         # Update architecture to indicate this is a single-k variant
@@ -164,38 +169,37 @@ def load_nested_thresholding_sae(
     Returns:
         A wrapped NestedThresholdingTopKSAE compatible with sae_bench
     """
-    path = Path(path)
+    dir_path = Path(path)
 
     # Load config
-    config_path = path / "config.json"
-    with open(config_path, 'r') as f:
+    config_path = dir_path / "config.json"
+    with open(config_path, "r") as f:
         config = json.load(f)
 
     # Extract layer from config if not provided
-    trainer_config = config['trainer']
+    trainer_config = config["trainer"]
     if layer is None:
-        layer = trainer_config['layer']
+        layer = trainer_config["layer"]
     else:
         # Validate layer matches config
-        assert layer == trainer_config['layer'], \
+        assert layer == trainer_config["layer"], (
             f"Provided layer {layer} doesn't match config layer {trainer_config['layer']}"
+        )
 
     # Load the SAE using from_pretrained
-    ae_path = path / "ae.pt"
-    k_values = trainer_config.get('k_values', [trainer_config.get('k')])
+    ae_path = dir_path / "ae.pt"
+    k_values = trainer_config.get("k_values", [trainer_config.get("k")])
 
     # Load the nested SAE
     nested_sae = NestedThresholdingAutoEncoderTopK.from_pretrained(
-        str(ae_path),
-        k_values=k_values,
-        device=str(device)
+        str(ae_path), k_values=k_values, device=str(device)
     )
 
     # Move to correct dtype
     nested_sae = nested_sae.to(dtype=dtype)
 
     # Create hook name
-    submodule_name = trainer_config.get('submodule_name', f'resid_post_layer_{layer}')
+    submodule_name = trainer_config.get("submodule_name", f"resid_post_layer_{layer}")
     hook_name = f"blocks.{layer}.hook_resid_post"
 
     # Wrap in sae_bench-compatible class
@@ -206,7 +210,7 @@ def load_nested_thresholding_sae(
         device=device,
         dtype=dtype,
         hook_name=hook_name,
-        config_dict=config
+        config_dict=config,
     )
 
     return wrapped_sae

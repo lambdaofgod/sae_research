@@ -1,0 +1,237 @@
+#+title: Tasks
+
+* TODO Fix ~ResilientS3RCache~ shutdown deadlock
+
+**Root cause identified** (PID 783351, 5 days hung, 3.5 GB VRAM held):
+
+The runner's main thread was stuck in
+~dictionary_learning.activault_s3_buffer.S3RCache._stop_downloading()~
+(line 524-542):
+
+#+BEGIN_SRC python
+while not all([not p.is_alive() for p in self._running_processes]):
+    if not self.readable_tensors.empty():
+        self.readable_tensors.get()
+    if not self.writeable_tensors.full():
+        self.writeable_tensors.put(0)
+    time.sleep(0.25)
+for p in self._running_processes:
+    p.join()
+#+END_SRC
+
+Cooperative-only shutdown: sets a stop flag and polls. Worker
+subprocesses are async tasks blocked inside ~aiohttp~ reads / shared-
+memory queue waits — they never see the stop flag because they're
+parked in syscalls. Loop spins forever; ~p.join()~ is never reached.
+GPU VRAM is held as a side effect — while the main thread is parked,
+Python references to the model / SAE / buffer never release, so CUDA
+tensors stay live in the allocator.
+
+Evidence from PID 783351: main-thread wchan ~hrtimer_nanosleep~,
+9+ multiprocessing children alive 5+ days, 49 open pipes,
+87 GB written / 9 GB read.
+
+** DONE Implementation
+
+CLOSED: ~sae_research/training/resilient_s3_cache.py~ now:
+
+1. Overrides ~_stop_downloading~ with a hard timeout: 5 s cooperative
+   wait → log a warning → ~p.terminate()~ on stragglers → 5 s grace
+   → ~p.kill()~ on any survivor. Constants ~_COOPERATIVE_SHUTDOWN_TIMEOUT_S~
+   and ~_TERMINATE_GRACE_S~ named in the file.
+2. Sets ~daemon=True~ on the worker ~Process(...)~ in ~__iter__~ so
+   workers die with the parent on Ctrl-C / abnormal exit.
+
+Pyrefly clean.
+
+** TODO Activault-based training smoke test
+
+The existing ~smoke_tests/smoke_test_training.py~ uses a
+~StubActivationBuffer~ that bypasses ~ResilientS3RCache~ entirely —
+the cache shutdown path is never exercised, so the existing smoke
+suite would pass even if the deadlock fix were broken.
+
+Add ~smoke_tests/smoke_test_activault_training.py~. Drives
+~run_sae_training~ down its Activault-path branch
+(~cli_runner.py:131~), which constructs ~ResilientS3RCache~ +
+~ActivaultS3ActivationBuffer~ — the path that hung on PID 783351.
+
+*** Entry point
+
+- ~main()~ is wrapped with ~fire.Fire~ so it's invokable as
+  ~uv run python smoke_tests/smoke_test_activault_training.py
+  [--cache=<name>]~.
+- ~--cache~ is *optional*. Selects which activault cache (S3 prefix)
+  to read activations from.
+
+*** Cache selection
+
+- If ~--cache~ is given: use it directly.
+- If omitted: list all caches available in activault, sort alphabetically,
+  pick the first. Log which one was picked *and* the other available
+  names so the user can re-run with ~--cache=<other>~ if they wanted a
+  different one. If zero caches available, error out pointing at the
+  activault setup docs (TODO: pick the right link).
+
+*** Error handling — point at ~with-k8s-env.sh~
+
+The activault S3 API and MLflow are reached via K8s port-forwards
+configured by ~scripts/with-k8s-env.sh~ (sets ~AWS_*~,
+~AWS_ENDPOINT_URL~, ~MLFLOW_TRACKING_URI~, plus ensures port-forwards
+are running). When run *without* that wrapper, the symptoms are
+~botocore.exceptions.NoCredentialsError~ /
+~EndpointConnectionError~ / ~ClientError~ on the first S3 list/get,
+and an unhelpful traceback.
+
+Catch those at the top level and re-raise (or print + exit) with a
+message like:
+
+#+BEGIN_SRC
+Couldn't reach activault S3 (<original error>).
+This usually means K8s port-forwards / S3 credentials aren't set.
+Re-run inside the helper:
+    bash scripts/with-k8s-env.sh uv run python smoke_tests/smoke_test_activault_training.py [...]
+#+END_SRC
+
+Apply the same wrapping for MLflow connection errors if MLflow is in
+the smoke path.
+
+*** Test body
+
+- Trains a tiny SAE for a handful of steps so the cache actually
+  spawns workers, downloads at least one chunk, and reaches
+  ~_stop_downloading~ on exit.
+- Runs as a *subprocess* with a deadline (e.g. ~timeout=120 s~) so a
+  regressed shutdown deadlock surfaces as a subprocess timeout, not
+  a frozen pytest.
+- After the subprocess exits, asserts:
+  - exit code 0 within the deadline,
+  - no descendants of the run's pgid survive (no
+    ~multiprocessing.spawn_main~ leftovers),
+  - GPU memory delta back to zero.
+
+*** Open questions
+
+- Should this also assert that the
+  ~"S3 cache shutdown: N worker(s) ignored stop flag"~ warning is
+  *not* emitted on a clean run, and *is* emitted when we deliberately
+  wedge a worker (e.g. by monkey-patching the worker loop to ignore
+  ~self._stop.value~)? That would turn this from "smoke test" into
+  "regression test for the actual fix" — probably worth doing as a
+  follow-up subtask once the basic smoke is green.
+
+** Operational note
+
+Until verified on a real run, audit before launching long jobs:
+~ps -ef | grep training.runner~ and kill stragglers — they leak GPU
+memory and break later eval runs (this is exactly what blocked the
+Qwen-Scope comparison).
+
+* TODO Support Qwen 3.5 models (and Qwen-Scope SAEs) in the eval pipeline
+
+Goal: load Qwen3.5-9B + Qwen-Scope pretrained SAEs through the same
+~sae_research/eval/components.py:run_core_eval~ path we use for our own
+SAEs, and remove the standalone ~qwen_scope_saes/~ subproject.
+
+Loading recipe (HF-direct, used during Qwen-Scope training and verified
+to work in this venv) is documented in ~qwen_scope_saes/HOWTO.org~.
+
+** Background
+
+- ~transformer-lens~ ~main~ (~v3.1.0~) ships
+  ~Qwen3_5ArchitectureAdapter~ in
+  ~transformer_lens/model_bridge/supported_architectures/qwen3_5.py~
+  and dispatches it via ~TransformerBridge.boot_transformers~.
+- The legacy ~OFFICIAL_MODEL_NAMES~ registry (used by
+  ~HookedTransformer.from_pretrained_no_processing~) does *not*
+  include Qwen3.5 — only Qwen3 and below.
+- ~sae-bench~ core eval loads the LLM at
+  ~sae_bench/evals/core/main.py:1034~ via
+  ~HookedTransformer.from_pretrained_no_processing(sae.cfg.model_name, ...)~
+  → registry path → fails for Qwen3.5.
+- The ~TransformerBridge~ exposes every API ~sae-bench~ relies on
+  (verified on Qwen3-0.6B): ~W_E~, ~tokenizer~, ~cfg.device~,
+  ~model(..., return_type='both', loss_per_token=True)~,
+  ~run_with_cache(..., prepend_bos=False, names_filter=[...], stop_at_layer=N)~,
+  ~run_with_hooks~.
+- Bridge's default behavior is raw HF weights (no LN folding, no
+  weight centering) — same semantics as ~from_pretrained_no_processing~.
+
+** Subtasks
+
+*** DONE Bridge-aware LLM loader (monkey-patch into sae-bench)
+CLOSED: ~sae_research/eval/components.py~ now defines a
+~_BridgeAwareHookedTransformer~ shim and assigns
+~core_eval_module.HookedTransformer = _BridgeAwareHookedTransformer~
+at import time. Tries the legacy ~OFFICIAL_MODEL_NAMES~ path first;
+falls back to ~TransformerBridge.boot_transformers~ on ~ValueError~
+(registry miss). The existing ~run_core_eval → multiple_evals~ flow
+picks it up without any further changes since sae-bench resolves
+~HookedTransformer~ through its module namespace at each call.
+
+*** DONE Qwen-Scope SAE loader
+CLOSED: ~sae_research/qwen_scope_loader.py~ provides
+~load_qwen_scope_sae(sae_path, model_name, hook_layer, k, device, dtype)~
+and ~download_and_load_qwen_scope_sae(repo_id, layer, ...)~ that
+return a ~DictionaryLearningSAEWrapper(AutoEncoderTopK(...))~ — no
+custom SAE class. ~k~ is required (no default), since it varies per
+release (~L0_50~, ~L0_100~, …). Bias adjustment
+~b_enc_adj = b_enc + b_dec @ W_enc.T~ makes the encoder mathematically
+equivalent to HOWTO.org's recipe; ReLU-before-TopK is a no-op on
+trained SAEs and the equivalence was verified empirically (next
+subtask). Both ~hf_hub_download~ and ~torch.load(weights_only=False)~
+are handled inside the loader.
+
+*** DONE Verify Qwen-Scope encode recipe (HOWTO.org) vs AutoEncoderTopK semantics
+CLOSED: bit-identical core metrics across layers **0, 14, and 28**
+of Qwen3.5-9B (~5–10 K tokens openwebtext per layer). The bias
+adjustment ~b_enc_adj = b_enc + b_dec @ W_enc.T~ makes pre-activations
+algebraically equal; the trailing ReLU before TopK is a no-op for the
+trained SAEs (top-k pre-activations are positive everywhere, including
+in the GDN linear-attention region around layer 28).
+
+Refactor: ~load_qwen_scope_sae~ returns
+~DictionaryLearningSAEWrapper(AutoEncoderTopK(...))~; the
+short-lived ~QwenScopeSAE~ class (which had implemented HOWTO's
+recipe verbatim) was deleted in favour of the equivalence. Comparison
+script ~smoke_tests/qwen_scope_layers_compare.py~ also deleted —
+it was a one-shot empirical check, results recorded here.
+
+Only deltas observed: ~core_frac_alive~ at the 4th–5th decimal
+(float-ordering of essentially-tied top-k indices). ~core_kl_div_score~
+is ~nan~ everywhere — pre-existing sae-bench bug, same for both
+variants so it doesn't bias the comparison. Worth a separate
+~kl_div_score~ debug task if we end up needing that metric.
+
+*** DONE Verify hook fires on the SAE's target layer
+CLOSED: implicitly verified by the smoke test + layer-comparison runs.
+~blocks.{0,14,28}.hook_resid_post~ all fire correctly on Qwen3.5-9B
+through the ~TransformerBridge~. Layer 28 sits inside the GDN
+linear-attention region (the bridge warns about ~hook_q_input~ /
+~hook_k_input~ / ~hook_v_input~ aliases on layers 24–30, but those
+are intra-attention hooks unrelated to ~hook_resid_post~). Reconstruction
+quality at L28 (EV ≈ 0.77) is consistent with published Qwen-Scope
+numbers, ruling out a wiring bug.
+
+*** DONE Smoke test for Qwen-Scope eval
+CLOSED: ~smoke_tests/smoke_test_qwen_scope_eval.py~ loads
+~qwen_scope_saes/layer0.sae.pt~, runs ~run_core_eval~ end-to-end on
+Qwen3.5-9B (fp16, batch=1, ctx=64), asserts ~49 ≤ L0 ≤ 51~ and
+~EV > 0.5~. Latest run: L0 = 50.0, EV = 0.987.
+
+Caveat: the test still references the local ~qwen_scope_saes/layer0.sae.pt~
+file — switching it to ~download_and_load_qwen_scope_sae~ is part
+of the next subtask.
+
+*** TODO Retire qwen_scope_saes/ subdirectory
+
+- Switch ~smoke_tests/smoke_test_qwen_scope_eval.py~ to call
+  ~download_and_load_qwen_scope_sae(repo_id="Qwen/SAE-Res-Qwen3.5-9B-Base-W64K-L0_50",
+  layer=0, k=50, ...)~ instead of reading ~qwen_scope_saes/layer0.sae.pt~ directly.
+- Delete ~qwen_scope_saes/~ entirely (its venv, lock, pyproject, HOWTO,
+  layer14/28.sae.pt downloads).
+- Trim ~qwen_scope_saes/HOWTO.org~ status section if any of it is
+  worth preserving as a top-level note; otherwise drop with the
+  directory.
+
+Unblocked — all upstream subtasks done.

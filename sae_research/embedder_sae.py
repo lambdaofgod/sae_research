@@ -4,7 +4,7 @@ from sentence_transformers.sparse_encoder import (
     SparseEncoderTrainer,
     losses,
 )
-from sentence_transformers.sparse_encoder.models import SparseAutoEncoder
+from sentence_transformers.sparse_encoder.modules import SparseAutoEncoder
 from sentence_transformers import SentenceTransformer
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,20 +30,24 @@ class SAEWrapper(SentenceTransformer):
     ):
         super().__init__(modules=[*sentence_transformer, sae])
 
+    # pyrefly: ignore[bad-override]
     def save(self, path: str, **kwargs) -> None:
         """Save only the SAE module + config with teacher model name."""
         import json
         import os
+
         os.makedirs(path, exist_ok=True)
         self.sae.save(path)
         with open(os.path.join(path, "extra_config.json"), "w") as f:
             json.dump({"teacher_model_name": self.teacher_model_name}, f)
 
     @classmethod
+    # pyrefly: ignore[bad-override]
     def load(cls, path: str) -> "SAEWrapper":
         """Load SAEWrapper from saved path."""
         import json
         import os
+
         config_path = os.path.join(path, "extra_config.json")
         with open(config_path) as f:
             config = json.load(f)
@@ -53,7 +57,9 @@ class SAEWrapper(SentenceTransformer):
 
     @property
     def sae(self) -> SparseAutoEncoder:
-        return list(self._modules.values())[-1]
+        from typing import cast
+
+        return cast(SparseAutoEncoder, list(self._modules.values())[-1])
 
     @property
     def teacher(self) -> SentenceTransformer:
@@ -63,8 +69,9 @@ class SAEWrapper(SentenceTransformer):
     @property
     def teacher_model_name(self) -> str:
         """Get the teacher model name from the first module."""
-        return list(self._modules.values())[0].auto_model.name_or_path
+        return list(self._modules.values())[0].auto_model.name_or_path  # pyrefly: ignore[missing-attribute]
 
+    # pyrefly: ignore[bad-override]
     def forward(
         self, features: dict[str, Tensor], max_active_dims: int | None = None
     ) -> dict[str, Tensor]:
@@ -90,7 +97,9 @@ class EmbeddingReconstructionLoss(nn.Module):
         for param in self.teacher.parameters():
             param.requires_grad = False
 
-    def forward(self, sentence_features: list[dict[str, Tensor]], labels=None) -> Tensor:
+    def forward(
+        self, sentence_features: list[dict[str, Tensor]], labels=None
+    ) -> Tensor:
         features = sentence_features[0]
 
         # 1. Get teacher embeddings (dense target)
@@ -110,7 +119,9 @@ class EmbeddingReconstructionLoss(nn.Module):
 class NormalizedEmbeddingReconstructionLoss(EmbeddingReconstructionLoss):
     """Uses normalized MSE: MSE(recon, target) / MSE(mean, target)"""
 
-    def forward(self, sentence_features: list[dict[str, Tensor]], labels=None) -> Tensor:
+    def forward(
+        self, sentence_features: list[dict[str, Tensor]], labels=None
+    ) -> Tensor:
         features = sentence_features[0]
 
         with torch.no_grad():
@@ -123,5 +134,7 @@ class NormalizedEmbeddingReconstructionLoss(EmbeddingReconstructionLoss):
 
         # Normalized MSE: divide by variance (MSE of predicting mean)
         mse = F.mse_loss(reconstruction, target)
-        baseline_mse = F.mse_loss(target.mean(dim=0, keepdim=True).expand_as(target), target)
+        baseline_mse = F.mse_loss(
+            target.mean(dim=0, keepdim=True).expand_as(target), target
+        )
         return mse / baseline_mse

@@ -1,0 +1,79 @@
+{{- if .Values.mlflow.enabled }}
+{{- $fullname := include "activault.fullname" . -}}
+{{- $dbSecretName := printf "%s-mlflow-db" $fullname -}}
+{{- $s3SecretName := printf "%s-s3-creds" $fullname -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-mlflow
+  labels:
+    app: {{ $fullname }}-mlflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $fullname }}-mlflow
+  template:
+    metadata:
+      labels:
+        app: {{ $fullname }}-mlflow
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z {{ $fullname }}-postgres 5432; do sleep 2; done"]
+      containers:
+        - name: mlflow
+          image: {{ .Values.mlflow.image }}
+          command:
+            - sh
+            - -c
+            - |
+              pip install --quiet psycopg2-binary boto3 &&
+              mlflow server \
+                --host=0.0.0.0 \
+                --port=5000 \
+                --disable-security-middleware \
+                --backend-store-uri="postgresql://mlflow:${POSTGRES_PASSWORD}@{{ $fullname }}-postgres:5432/mlflow" \
+                --default-artifact-root="s3://{{ .Values.mlflow.artifactBucket }}/"
+          ports:
+            - containerPort: 5000
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $dbSecretName }}
+                  key: POSTGRES_PASSWORD
+            - name: MLFLOW_S3_ENDPOINT_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3SecretName }}
+                  key: AWS_ENDPOINT_URL
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3SecretName }}
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3SecretName }}
+                  key: AWS_SECRET_ACCESS_KEY
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-mlflow
+spec:
+  selector:
+    app: {{ $fullname }}-mlflow
+  ports:
+    - port: 5000
+      targetPort: 5000
+{{- end }}

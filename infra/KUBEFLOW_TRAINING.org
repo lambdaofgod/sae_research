@@ -1,0 +1,475 @@
+#+title: Kubeflow Training Operator v2
+#+author: auto-generated reference
+#+date: 2026-04-02
+
+* Overview
+
+Kubeflow Training Operator v2 (repo: =kubeflow/trainer=, formerly =kubeflow/training-operator=)
+provides a =TrainJob= CRD for submitting training workloads to Kubernetes.
+
+Platform admins define =ClusterTrainingRuntime= resources (GPU defaults, base images,
+failure handling). Users submit lightweight =TrainJob= manifests that reference a runtime.
+
+Our use case: submit single-GPU SAE training jobs (=runner.py=) to the cluster
+with proper GPU scheduling, secret injection, and shared memory for PyTorch.
+
+* Prerequisites
+
+- Kubernetes >= 1.28 (we run 1.35.1)
+- *JobSet CRD* must be installed — Training Operator v2 builds on top of JobSet.
+  Check: =kubectl get crds | grep jobset=
+
+* Installation
+
+** Helm (recommended)
+
+Chart is served from an OCI registry — no =helm repo add= needed.
+
+#+begin_src bash
+VERSION=2.2.0
+
+# Controller only
+helm install kubeflow-trainer oci://ghcr.io/kubeflow/charts/kubeflow-trainer \
+    --namespace kubeflow-system \
+    --create-namespace \
+    --version ${VERSION}
+
+# With built-in runtimes (torch-distributed, deepspeed, etc.)
+helm install kubeflow-trainer oci://ghcr.io/kubeflow/charts/kubeflow-trainer \
+    --namespace kubeflow-system \
+    --create-namespace \
+    --version ${VERSION} \
+    --set runtimes.defaultEnabled=true
+
+# With specific runtimes only
+helm install kubeflow-trainer oci://ghcr.io/kubeflow/charts/kubeflow-trainer \
+    --namespace kubeflow-system \
+    --create-namespace \
+    --version ${VERSION} \
+    --set runtimes.torchDistributed.enabled=true
+#+end_src
+
+** kubectl alternative
+
+#+begin_src bash
+export VERSION=v2.2.0
+
+# Controller
+kubectl apply --server-side -k \
+  "https://github.com/kubeflow/trainer.git/manifests/overlays/manager?ref=${VERSION}"
+
+# Built-in runtimes
+kubectl apply --server-side -k \
+  "https://github.com/kubeflow/trainer.git/manifests/overlays/runtimes?ref=${VERSION}"
+#+end_src
+
+** Verify
+
+#+begin_src bash
+kubectl get crds | grep trainer.kubeflow.org
+# Expected:
+#   clustertrainingruntimes.trainer.kubeflow.org
+#   trainingruntimes.trainer.kubeflow.org
+#   trainjobs.trainer.kubeflow.org
+#+end_src
+
+* CRDs
+
+| CRD                    | Scope     | Purpose                                        |
+|------------------------+-----------+------------------------------------------------|
+| ClusterTrainingRuntime | cluster   | Admin-defined template: image, GPU, mlPolicy   |
+| TrainingRuntime        | namespace | Same as above but scoped to a namespace        |
+| TrainJob               | namespace | User-submitted job referencing a runtime        |
+
+* ClusterTrainingRuntime
+
+Defines the pod template that TrainJobs will use. Admins set the base image,
+resource defaults, and ML framework configuration here.
+
+** Built-in =torch-distributed= runtime
+
+This is what ships with the operator when =runtimes.torchDistributed.enabled=true=:
+
+#+begin_src yaml
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: ClusterTrainingRuntime
+metadata:
+  name: torch-distributed
+  labels:
+    trainer.kubeflow.org/framework: torch
+spec:
+  mlPolicy:
+    numNodes: 1
+    torch: {}
+  template:
+    spec:
+      replicatedJobs:
+        - name: node
+          template:
+            metadata:
+              labels:
+                trainer.kubeflow.org/trainjob-ancestor-step: trainer
+            spec:
+              template:
+                spec:
+                  containers:
+                    - name: node
+                      image: pytorch/pytorch:2.10.0-cuda12.8-cudnn9-runtime
+#+end_src
+
+** Custom runtime example
+
+A runtime for single-GPU training with shared memory (needed by PyTorch DataLoader):
+
+#+begin_src yaml
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: ClusterTrainingRuntime
+metadata:
+  name: sae-single-gpu
+  labels:
+    trainer.kubeflow.org/framework: torch
+spec:
+  mlPolicy:
+    numNodes: 1
+  template:
+    spec:
+      replicatedJobs:
+        - name: node
+          template:
+            metadata:
+              labels:
+                trainer.kubeflow.org/trainjob-ancestor-step: trainer
+            spec:
+              template:
+                spec:
+                  tolerations:
+                    - key: nvidia.com/gpu
+                      operator: Exists
+                      effect: NoSchedule
+                  containers:
+                    - name: node
+                      image: my-training-image:latest
+                      resources:
+                        requests:
+                          memory: "16Gi"
+                        limits:
+                          nvidia.com/gpu: "1"
+                          memory: "32Gi"
+                      volumeMounts:
+                        - name: dshm
+                          mountPath: /dev/shm
+                  volumes:
+                    - name: dshm
+                      emptyDir:
+                        medium: Memory
+                        sizeLimit: "16Gi"
+#+end_src
+
+* TrainJob
+
+Lightweight manifest submitted by users. References a runtime and optionally patches it.
+
+** Minimal
+
+#+begin_src yaml
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: my-training-run
+spec:
+  runtimeRef:
+    apiGroup: trainer.kubeflow.org
+    kind: ClusterTrainingRuntime
+    name: sae-single-gpu
+#+end_src
+
+** With runtimePatches
+
+=runtimePatches= can add volumes, tolerations, nodeSelector, serviceAccount.
+They *cannot* override image, resources, command, args, or env vars for the
+=node= container — use the Trainer API for those.
+
+#+begin_src yaml
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: my-training-run
+spec:
+  runtimeRef:
+    apiGroup: trainer.kubeflow.org
+    kind: ClusterTrainingRuntime
+    name: sae-single-gpu
+  runtimePatches:
+    - manager: trainer.kubeflow.org/kubeflow-sdk
+      trainingRuntimeSpec:
+        template:
+          spec:
+            replicatedJobs:
+              - name: node
+                template:
+                  spec:
+                    template:
+                      spec:
+                        volumes:
+                          - name: training-data
+                            persistentVolumeClaim:
+                              claimName: my-data-pvc
+                        containers:
+                          - name: trainer
+                            volumeMounts:
+                              - name: training-data
+                                mountPath: /workspace/data
+                        nodeSelector:
+                          accelerator: nvidia-tesla-v100
+                        tolerations:
+                          - key: nvidia.com/gpu
+                            operator: Exists
+                            effect: NoSchedule
+#+end_src
+
+* MLPolicy
+
+Controls distributed training configuration. Set in the runtime's =spec.mlPolicy=.
+
+| Field          | Description                                              |
+|----------------+----------------------------------------------------------|
+| numNodes       | Number of training nodes (1 for single-GPU)              |
+| torch          | Torch-specific config (numProcPerNode, etc.)             |
+| mpi            | MPI-specific config (numProcPerNode, implementation)     |
+| (empty)        | PlainML — standard K8s Jobs with parallelism = numNodes  |
+
+** Torch policy
+
+#+begin_src yaml
+mlPolicy:
+  numNodes: 3
+  torch:
+    numProcPerNode: gpu   # "auto", "gpu", or integer
+#+end_src
+
+Uses =torchrun= CLI under the hood. =numProcPerNode: gpu= means one process per GPU.
+
+For single-GPU non-DDP training, just use:
+
+#+begin_src yaml
+mlPolicy:
+  numNodes: 1
+#+end_src
+
+* Reference
+
+- Upstream docs: https://www.kubeflow.org/docs/components/trainer/
+- GitHub: https://github.com/kubeflow/trainer
+- Runtime guide: https://www.kubeflow.org/docs/components/trainer/operator-guides/runtime/
+- Job template: https://www.kubeflow.org/docs/components/trainer/operator-guides/job-template/
+- RuntimePatches: https://www.kubeflow.org/docs/components/trainer/operator-guides/runtime-patches/
+- MLPolicy: https://www.kubeflow.org/docs/components/trainer/operator-guides/ml-policy/
+- JobSet (dependency): https://jobset.sigs.k8s.io/
+
+* Planned refactor: unified trainer and dynamic architecture loading
+
+** Problem
+
+Adding a new SAE architecture currently requires changes in 3+ places:
+
+1. =config.py= -- add =TrainerType= enum value, add =TrainerConfig= dataclass,
+   add branch in =get_trainer_configs()= if-chain (~200 lines), add top-level
+   imports of trainer and SAE classes
+2. =utils.py= -- add entry to =_DICT_REGISTRY= (or =_FROM_CONFIG_REGISTRY=),
+   add top-level imports of SAE classes
+3. Rebuild the training container image (all classes must be baked in)
+
+The trainer classes (10+ of them) are ~95% identical. The =update()= method
+follows the same skeleton everywhere:
+
+#+begin_example
+def update(self, step, x):
+    if step == 0: self.ae.b_dec.data = geometric_median(x)
+    x = x.to(self.device)
+    loss = self.loss(x, step=step)         # <-- only real variation
+    loss.backward()
+    remove_gradient_parallel_to_decoder_directions(...)
+    clip_grad_norm_(...)
+    optimizer.step(); optimizer.zero_grad(); scheduler.step()
+    set_decoder_norm_to_unit_norm(...)
+    return loss.item()
+#+end_example
+
+The only real differences:
+- *Loss function* -- sparsity mechanism differs per architecture
+- *Decoder weight access* -- =nn.Linear= stores weight as =(activation_dim,
+  dict_size)=, =nn.Parameter= stores it as =(dict_size, activation_dim)=.
+  Affects 2 lines (gradient projection + norm enforcement). The trainer should
+  not care about this: it gets the decoder attribute path as a string, resolves
+  it, and infers the convention from the attribute type.
+- *Post-step hooks* -- some architectures call =update_annealed_k(step)= or
+  =update_annealed_s(step)=. Stiefel skips gradient projection and decoder
+  norm entirely (Riemannian optimizer handles manifold constraints).
+- *Temporal data shape* -- temporal trainers receive =[batch, 2, d_model]=
+  instead of =[batch, d_model]= (stacked adjacent-token pairs).
+
+The =Nested*= trainer variants don't even override =update()= -- they only
+override =loss()= from their parent.
+
+** Proposed design
+
+*** Single unified trainer
+
+One trainer class. Parameterized by:
+
+- *Loss class* -- pluggable, loaded by import path. This is where all the
+  actual architecture-specific logic lives (sparsity, auxiliary losses,
+  threshold updates, dead feature tracking).
+- *Decoder attribute path* -- string like ="decoder.weight"= or ="W_dec"=.
+  Trainer resolves via =getattr=, infers =nn.Linear= vs =nn.Parameter= from
+  the type. Handles transpose automatically.
+- *Post-step hooks* -- optional annealing (k, s) and optional skip flags
+  for Stiefel (=skip_gradient_projection=, =skip_decoder_norm=).
+- Standard training params: =lr=, =seed=, =dict_size=, =k=, =warmup_steps=, etc.
+  Note: =k= is common across nearly all architectures.
+
+*** Per-architecture YAML configs
+
+Each architecture gets its own YAML file describing the plumbing:
+
+#+begin_example
+# sae_research/training/configs/architectures/batch_top_k.yaml
+dict_class: "dictionary_learning.trainers.batch_top_k.BatchTopKSAE"
+loss_class: "sae_research.training.losses.BatchTopKLoss"
+decoder_attr: "decoder.weight"
+
+defaults:
+  auxk_alpha: 0.03125
+  threshold_beta: 0.999
+  threshold_start_step: 1000
+#+end_example
+
+Training run config references architecture by name. =get_trainer_configs()=
+if-chain, =TrainerType= enum, and per-architecture =TrainerConfig= dataclasses
+all go away.
+
+*** Import-path-based loading (kill _DICT_REGISTRY)
+
+=_DICT_REGISTRY= and =_FROM_CONFIG_REGISTRY= in =utils.py= are replaced by
+dotted import paths resolved via =importlib= at load time. The architecture
+YAML provides the import path; =load_dictionary()= uses it to get the class.
+No top-level imports of architecture classes anywhere.
+
+*** Passing configs to K8s jobs
+
+Architecture YAMLs ship with the =sae_research= package (already in the
+container). The training run config is the only thing that varies per job --
+passed as a single =config_yaml= string parameter to the KFP component /
+TrainJob.
+
+For experimental architectures (arch injection), two additional string params:
+=arch_file= (the .py source) and =arch_config_yaml= (the architecture YAML).
+Written to =/tmp= at runtime, added to =sys.path=, bundled into the MLflow
+artifact via =mlflow.pyfunc.log_model(code_paths=[...])=.
+
+This eliminates the subprocess hack in =train_pipeline.py= -- the component
+calls the training function directly.
+
+** Existing tasks affected
+
+- *Self-contained SAE artifacts (mlflow.pyfunc)* -- pyfunc logging bundles
+  architecture code with weights, making =_DICT_REGISTRY= unnecessary for
+  loading. The unified trainer + pyfunc together close the loop: pyfunc handles
+  saving/loading, the architecture YAML handles training config.
+- *MLflow pyfunc model logging* -- the =code_paths= mechanism is how injected
+  arch files get persisted. Prerequisite for arch injection.
+- *Update eval reconciler to use mlflow.pyfunc.load_model* -- once pyfunc is
+  the primary artifact format, eval no longer needs the registry either.
+- *Support experimental architectures via arch file injection* -- depends on
+  the unified trainer (otherwise the injected file would need to provide an
+  entire Trainer subclass, not just an SAE class + loss).
+- *Fix subprocess hack in train_pipeline.py* -- resolved naturally when the
+  KFP component passes a config dict instead of CLI args.
+- *YAML-driven training runner* -- the run config YAML is what the unified
+  trainer consumes. These tasks merge.
+- *Training experiment separation* -- =experiment_name= becomes a field in the
+  run config YAML.
+
+** New tasks to add (sketch)
+
+*** Replace =_DICT_REGISTRY= with import-path-based loading
+Small, can be done independently. Change =utils.py= =load_dictionary()= to
+resolve class from a dotted import path stored in =config.json= (or the
+architecture YAML). Remove all top-level architecture imports from =utils.py=.
+Backwards-compatible: existing =config.json= files still work via a fallback
+that maps class name to import path.
+
+*** Extract loss classes from existing trainers
+For each architecture, extract the =loss()= method from the existing trainer
+into a standalone loss class. Should be nearly mechanical -- the loss methods
+are self-contained. Need to decide what the loss class interface looks like
+and where post-step hooks (threshold update, k annealing) live.
+
+*** Unified trainer class
+The single trainer that replaces all per-architecture trainers. Takes an SAE
+instance, a loss instance, decoder attr path, and skip flags. The =update()=
+method is the common skeleton shown above.
+
+*** Per-architecture YAML configs
+Move architecture plumbing from Python (=config.py= imports, =TrainerType=
+enum, =get_trainer_configs()= if-chain) into YAML files. One file per
+architecture.
+
+*** Update training run config format
+The run config YAML references an architecture by name and provides sweep
+axes. Replaces the current =defaults.yaml= + =demo_config= module globals.
+Subsumes the "YAML-driven training runner" task.
+
+** Questions to clarify
+
+*** What does the injected arch file export?
+For built-in architectures, the architecture YAML points at specific import
+paths for =dict_class= and =loss_class=. For an injected experimental file,
+what's the contract? Options:
+- The file must define =SAE_CLASS= and =LOSS_CLASS= module-level names
+- The file must define classes with specific base classes and we discover them
+- The =arch_config_yaml= explicitly names the classes from the file
+Third option is most explicit and doesn't require magic names or discovery.
+
+*** Loss class: stateless function or stateful object?
+Some losses just compute a tensor (basic reconstruction + sparsity). But
+others track running state:
+- =update_threshold()= -- maintains a running threshold for activation filtering
+- Dead feature tracking -- running count of features that haven't fired
+- =update_annealed_k()= / =update_annealed_s()= -- step-dependent annealing
+If stateful, the loss object gets initialized with the SAE and maintains its
+own state. If stateless, these hooks need to live somewhere else (on the SAE
+class? on the trainer?). Where do =scale_biases()= and =update_threshold()=
+from =dictionary_learning= SAE classes fit -- are they called from the loss
+or from a post-step hook?
+
+*** How to handle dictionary_learning trainer loss methods?
+=dictionary_learning= is pinned and its trainers have their own =loss()=
+methods. Options:
+- Rewrite loss for all architectures (including ones from =dictionary_learning=)
+  as standalone loss classes -- clean but duplicates logic
+- Wrap the existing =dictionary_learning= trainer's =loss()= method as a loss
+  class -- reuses existing code but couples to the external package's internals
+- Only use the unified trainer for =sae_research= architectures, keep
+  =dictionary_learning= trainers as-is -- avoids the problem but defeats the
+  purpose of unification
+
+*** Sweep generation: who owns the sweep axes?
+Currently =get_trainer_configs()= has architecture-specific sweep logic
+(standard sweeps over =l1_penalty=, top-k over =k=, jump_relu over
+=target_l0=). With the unified approach:
+- Does the architecture YAML declare which of its params are sweepable and
+  what values to try?
+- Or is it purely the training run config's job to list sweep axes?
+- Or does the architecture YAML declare sweepable params and the run config
+  overrides the values?
+
+*** Temporal data shape: trainer or loss concern?
+Temporal trainers receive =[batch, 2, d_model]= (adjacent token pairs).
+The =update()= skeleton assumes =[batch, d_model]=. Options:
+- Temporal loss class handles the slicing internally (receives raw stacked
+  input, splits into current/adjacent inside =loss()=)
+- Trainer has a preprocessing hook that reshapes before calling loss
+- Temporal architectures use a thin trainer subclass that overrides just
+  the input handling
+First option keeps the trainer fully generic.

@@ -63,7 +63,7 @@ class HardThresholding(nn.Module):
         """
         # Take top-k features per position along the d_sae dimension
         # This gives (seq_len, k)
-        top_indices = torch.topk(feature_acts.abs(), self.k.item(), dim=-1).indices
+        top_indices = torch.topk(feature_acts.abs(), int(self.k.item()), dim=-1).indices  # pyrefly: ignore [not-callable]
 
         thresholded_feature_acts = torch.scatter(
             torch.zeros_like(feature_acts),

@@ -1,0 +1,12 @@
+{{- if .Values.garage.monitoring.metrics.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "activault.fullname" . }}-garage-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  garage.json: |-
+{{ .Files.Get "dashboards/garage.json" | indent 4 }}
+{{- end }}

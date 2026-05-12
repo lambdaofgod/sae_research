@@ -1,0 +1,23 @@
+run_name: "gemma2_2b"
+num_runs: 1
+transformer_config:
+  model_name: "google/gemma-2-2b-it"
+  dtype: "bfloat16"
+  cache_dir: "/cache"
+  max_per_device_memory: "24GB"
+data_config:
+  bucket_name: "activations"
+  data_key: "monology/pile-uncopyrighted"
+  n_batches: 3600
+  seq_length: 256
+  batch_size: 64
+  seed: 42
+  skip_cache: false
+  start_batch: 0
+  clean_added_tokens: false
+  clean_default_system_prompt: false
+upload_config:
+  batches_per_upload: 4
+  hooks:
+    - "models.layers.13.self_attn.post"
+    - "models.layers.13.mlp.post"

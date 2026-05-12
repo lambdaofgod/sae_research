@@ -148,104 +148,55 @@ Odpalilem MPSAE i IHTPSAE w SAEBench - dzialaja i jedyny problem jest na koncu z
 
 
 
-* Negative Results for SAEs On Downstream Tasks and Deprioritising SAE Research (GDM Mech Interp Team Progress Update #2)
-:PROPERTIES:
-:CREATED:  <2025-10-20 pon> [23:26]
-:END:
-
-https://www.alignmentforum.org/posts/4uXCAJNuPKtKBsi28/sae-progress-update-2-draft
-W tym poście jest sygnalizowane że SAE wyglądają na ślepą uliczkę, ALE w zasadzie to autorzy sami wymienili potencjalnie przydatne kierunki:
-
-#+BEGIN_QUOTE
-There are also other valuable projects, for example, *are there much cheaper ways we can train SAEs of acceptable quality? Or to get similar effects with other feature clustering or dictionary learning methods instead?* If we’re taking a pragmatic approach to SAEs, rather than the ambitious approach of trying to find the canonical units of analysis, then sacrificing some quality in return for lowering the major up front cost of SAE training may be worthwhile.
-#+END_QUOTE
-
-** Nurt 1 - zachłanne metody dekodowania i ich korzyści
-:PROPERTIES:
-:CREATED:  <2025-10-20 pon> [23:29]
-:END:
-
-*are there much cheaper ways we can train SAEs of acceptable quality? Or to get similar effects with other feature clustering or dictionary learning methods instead?*
-
-Jedyną pracą która wykorzystuje zachłanne metody dekodowania jest ta z MPSAE https://arxiv.org/pdf/2506.05239v1
-ale ta praca wykorzystuje tylko zachłanne dekodowanie /jako architekturę/, a nie jako coś co można użyć do wytrenowanego SAE.
-
-*** Hipoteza: dzięki zachłannemu dekodowaniu można pominąć trenowanie dla wielu hiperparametrów
-:PROPERTIES:
-:CREATED:  <2025-10-20 pon> [23:34]
-:END:
-
-Opiera się to na prostej obserwacji że metodami zachłannymi możemy sprowadzić model z wysokim $k$, powiedzmy 500, do $k=100$
-
-Eksperyment: sprawdzamy modele np TopK z różnym $k$ i porównujemy je do tego co otrzymaliśmy zachłannym dekodowaniem z modelu z najwyższym $k$
-
-
-
-* Pomysły z architekturą
-:PROPERTIES:
-:CREATED:  <2025-10-20 pon> [23:19]
-:END:
-
-** DONE Reprodukcja modeli z SAEBench
+* Training custom SAEs
 :PROPERTIES:
 :CREATED:  <2025-10-20 pon> [23:16]
 :END:
 
-Wygląda na to że modele do SAEBench były trenowane przez skrypt w dictionary_learning_demo
+** Reprodukcja modeli z SAEBench
 
-Oryginalnie to jest używane z 500M tokenów ale w sumie mnie bardziej podoba się pomysł żeby używać 5M (a potem może 50M) żeby przyspiszyć eksperymenty
+Modele do SAEBench były trenowane przez skrypt w dictionary_learning_demo.
+Oryginalnie używane z 500M tokenów, eksperymenty z 5M (i potem 50M) żeby przyspieszyć.
 
-** DONE Modele z pursuit/progowaniem
-:PROPERTIES:
-:CREATED:  <2025-10-20 pon> [23:19]
-:END:
+** Modele z pursuit/progowaniem
 
 https://github.com/adamkarvonen/dictionary_learning_demo/compare/main...lambdaofgod:dictionary_learning_demo:main
 
-Dodane trenowanie "zagnieżdżonych" topk SAE z progowaniem
+Dodane trenowanie "zagnieżdżonych" topk SAE z progowaniem.
 
-* [#A] quasi-orthogonal
+* Code inventory
 :PROPERTIES:
-:CREATED:  <2025-10-22 śro> [21:48]
+:CREATED:  <2026-03-23 pon>
 :END:
 
-[[cite:&lee25_evaluat_desig_spars_autoen_by]]
+** Custom SAE architectures
 
-Ta praca explicite rozważa mutual coherence, ale wiele jej brakuje
-to ograniczenie z Johnsona-Lindenstraussa jest dużo słabsze - ograniczenia RIP
-mają dużo więcej sensu
+- *ThresholdingAutoEncoderTopK* (~sae_research/thresholding_sae.py~) :: Hard top-k on ~(x - b_dec) @ W_dec~, single decoder matrix for encode+decode. Nested variant: ~NestedThresholdingAutoEncoderTopK~ — multiple k values trained simultaneously with weighted losses.
 
-* Open problem in MI C*4.26
-:PROPERTIES:
-:CREATED:  <2025-10-30 czw> [22:03]
-:END:
+- *InstanceHardThresholdingPursuitSAE* (~sae_research/instance_sae.py~) :: Instance-level support (union of top-k across tokens), then sparse least squares solve on that support.
 
-#+BEGIN_QUOTE
-C* 4.26 - Can you find any examples of locally almost-orthogonal bases? That is, where correlated features each get their own direction, but can interfere significantly with un/anti-correlated features.
-#+END_QUOTE
+- *MPSAE* (Matching Pursuit) (~sae_research/instance_sae.py~) :: Greedy iterative: pick max-correlation feature with residual, update residual, repeat for S steps.
 
-* take: algebraic geometry
-:PROPERTIES:
-:CREATED:  <2025-10-30 czw> [21:58]
-:END:
+** Inference and evaluation code (sae_research/)
 
-** IDEA orthogonal rows - unit columns
-:PROPERTIES:
-:CREATED:  <2025-10-30 czw> [21:56]
-:END:
+- =thresholding_sae.py= :: Autoencoder classes (inference only)
+- =instance_sae.py= :: IHTP and MPSAE classes + loaders (~load_from_sae_lens~, ~load_dictionary_learning_instance_sae~)
+- =modules.py= :: Building blocks: ~HardThresholdingSupportSelector~, ~SparseLeastSquares~, ~HardThresholding~
+- =dictionary_learning_adapters.py= :: ~NestedThresholdingTopKSAE~ wrapper for sae_bench compatibility
 
-$A$ is an $n \times p$ matrix such that
+** Training code (fork: ../forks/dictionary_learning_demo/)
 
-$AA^T = diag(v)$ where $v$ is some vector and $\|A_:,i\| = 1$
+Fork of =adamkarvonen/dictionary_learning_demo=, 2 commits ahead of upstream.
+Compare: https://github.com/adamkarvonen/dictionary_learning_demo/compare/main...lambdaofgod:dictionary_learning_demo:main
 
-This is an algebraic variety
+- =thresholding_sae.py= :: ~ThresholdingTopKTrainer~, ~NestedThresholdingTopKTrainer~
+- =matching_pursuit_sae.py= :: ~MatchingPursuitTrainer~, ~NestedMatchingPursuitTrainer~
+- =stiefel_sae.py= :: Experimental: Stiefel manifold-constrained decoder via =geoopt=
+- =demo_config.py= :: ~TrainerType~ enums and configs
 
-** equiangular frames
-:PROPERTIES:
-:CREATED:  <2025-10-30 czw> [21:58]
-:END:
+** Trained models (dictionary_learning_saes/)
 
-Here the problem is that equiangularity is encoded by $A^T A$
+Nested thresholding top-k SAEs, ~k_values = [20, 40, 80, 160, 320]~:
 
 How to make this less crazy:
 - apply regularization in-batch on selected columns
@@ -293,3 +244,5 @@ In experiments/sparse_subspace_clustering/ssc.org I experimented with the method
 
 In experiments/sparse_subspace_clustering I created a dvc pipeline that extracts clusters
 
+- Pythia 70M layer 3
+- Gemma 2 2B layers 11 and 12 (including a 200M token test variant)

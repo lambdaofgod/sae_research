@@ -1,0 +1,12 @@
+{{- if .Values.exporter.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "activault.fullname" . }}-activault-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  activault-storage.json: |-
+{{ .Files.Get "dashboards/activault-storage.json" | indent 4 }}
+{{- end }}

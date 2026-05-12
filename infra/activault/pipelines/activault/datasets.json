@@ -1,0 +1,9 @@
+{
+    "monology/pile-uncopyrighted": {
+        "name": "monology/pile-uncopyrighted",
+        "subset": "default",
+        "columns": [
+            "text"
+        ]
+    }
+}

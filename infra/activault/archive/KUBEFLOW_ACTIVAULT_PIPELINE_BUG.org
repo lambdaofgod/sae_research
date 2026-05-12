@@ -1,0 +1,121 @@
+#+title: KFP Pipeline Hangs During Inference (GPU Idle)
+
+* Resolution
+
+*RESOLVED.* Root cause was missing =/dev/shm= mount. PyTorch DataLoader uses shared
+memory for inter-process tensor transfer; the default 64MB container =/dev/shm= causes
+a silent deadlock. Fix:
+
+#+begin_src python
+kubernetes.empty_dir_mount(task, volume_name='dshm', mount_path='/dev/shm', medium='Memory', size_limit='16Gi')
+#+end_src
+
+After adding this, the pipeline runs at ~140 MB/s upload speed, matching plain pod
+performance.
+
+* Symptom
+
+The activault collect pipeline runs fine as a plain Kubernetes pod (=kubectl run=)
+but hangs silently when submitted through Kubeflow Pipelines. GPU utilization drops
+to 0% after model loading and setup complete. No error in logs — the process just
+stops producing output after "Skipped 0 tokens from 0 sequences".
+
+The same container image (=activault-flashattn:latest=), same config, same secrets,
+same namespace resources — works as a plain pod, hangs under KFP.
+
+* What works
+
+Plain pod in =default= namespace with this spec:
+
+- image: =activault-flashattn:latest=, =imagePullPolicy: Never=
+- env vars: =S3_ENDPOINT_URL=, =AWS_ACCESS_KEY_ID=, etc.
+- volume: =activault-config= ConfigMap at =/etc/activault=
+- volume: =dshm= emptyDir (medium: Memory, 16Gi) at =/dev/shm=
+- resources: 1 GPU, 16-32Gi memory
+
+Result: GPU at ~100% utilization, uploads to Garage at ~200 MB/s.
+
+* What hangs
+
+KFP pipeline pod in =kubeflow= namespace. Identical image, env vars, config mount,
+GPU resources. But KFP/Argo adds:
+
+- Sidecar containers (=argoexec= wait container)
+- The =kfp-launcher= wrapper around the actual command
+- emptyDir mounts at =/.cache=, =/.local=, =/.config=, =/gcs=, =/s3=, =/minio=
+- No =/dev/shm= mount
+
+Result: model loads, hooks attach, uploaders initialize, then GPU idle. No error,
+no crash, no further log output.
+
+* Likely causes
+
+** 1. Missing =/dev/shm= mount (most likely)
+
+PyTorch DataLoader with =num_workers > 0= uses shared memory (=/dev/shm=) for
+inter-process communication. The default =/dev/shm= in a container is 64MB. When
+workers try to share tensors larger than this, they silently hang (no error, no
+timeout — just deadlock).
+
+The plain pod mounts an emptyDir with =medium: Memory= at =/dev/shm= (16Gi). The
+KFP pipeline definition does not. This is the most likely cause.
+
+Fix: add a =/dev/shm= volume to the KFP pipeline via =kfp-kubernetes=. Check if
+=kubernetes.add_ephemeral_volume= supports =medium: Memory= emptyDirs. If not, may
+need a raw =podSpecPatch= or a PodDefault/PodPreset.
+
+** 2. emptyDir over =/.cache= interfering with PyTorch/CUDA
+
+KFP mounts empty scratch dirs at =/.cache= and =/.local=. PyTorch and HuggingFace
+use =~/.cache= for:
+- CUDA kernel compilation cache (=torch.utils.cpp_extension=)
+- HuggingFace model/tokenizer cache
+- xformers/flash-attn compiled kernels
+
+If compiled CUDA kernels are cached in the image at =/.cache= and KFP's emptyDir
+shadows that path, the process may be recompiling kernels (slow but not stuck) or
+failing to find required files.
+
+Less likely to cause a complete hang, but could explain slowness or subtle failures.
+
+** 3. KFP launcher interfering with process signals or I/O
+
+KFP wraps the user command with =/kfp-launcher/launch= which:
+- Intercepts stdout/stderr for log publishing
+- Manages MLMD (ML Metadata) reporting
+- Handles output artifact collection
+
+Could theoretically interfere with PyTorch's multiprocessing (fork vs spawn),
+CUDA context initialization, or signal handling. Unlikely but worth investigating
+if #1 and #2 don't explain it.
+
+* Debugging steps
+
+1. *Add =/dev/shm= to the pipeline and retry.* This is the most likely fix.
+   Check =kfp-kubernetes= API for emptyDir volume support:
+
+   #+begin_src python
+   from kfp import kubernetes
+   # Check if this exists:
+   # kubernetes.add_ephemeral_volume(task, ...)
+   # Or use empty_dir + empty_dir_mount
+   #+end_src
+
+2. *If #1 doesn't fix it, set =num_workers=0= in the DataLoader.* This bypasses
+   =/dev/shm= entirely but will be slower. Requires modifying the activault source
+   or passing it as config.
+
+3. *If #2 doesn't fix it, check the =/.cache= issue.* Run the KFP pod without
+   the scratch mounts, or set =TRANSFORMERS_CACHE= and =TORCH_HOME= to paths that
+   aren't shadowed.
+
+4. *Compare pod specs side by side.* Dump both the working plain pod and the KFP
+   pod specs and diff them to find any other differences.
+
+* Environment
+
+- Minikube with single GPU node
+- KFP standalone v2.15.0 (kustomize install)
+- Argo Workflows v3.7.3
+- Image: =activault-flashattn:latest= (flash-attn 2.7.4, PyTorch 2.7.0, CUDA 12.8)
+- Garage v0.9.2 as S3 backend

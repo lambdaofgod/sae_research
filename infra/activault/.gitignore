@@ -1,0 +1,9 @@
+__pycache__/
+.venv/
+*.egg-info/
+uv.lock
+
+# Helm
+activault/Chart.lock
+activault/charts/*.tgz
+activault/tmpcharts-*/

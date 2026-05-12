@@ -1,0 +1,67 @@
+{{- if .Values.proxy.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "activault.fullname" . }}-proxy
+data:
+  nginx.conf: |
+    worker_processes 1;
+    events { worker_connections 128; }
+    http {
+      {{- range .Values.proxy.services }}
+      server {
+        listen {{ .port }};
+        location / {
+          proxy_pass http://{{ .upstream }};
+          proxy_set_header Host $http_host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+      }
+      {{- end }}
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "activault.fullname" . }}-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "activault.fullname" . }}-proxy
+  template:
+    metadata:
+      labels:
+        app: {{ include "activault.fullname" . }}-proxy
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+          ports:
+            {{- range .Values.proxy.services }}
+            - containerPort: {{ .port }}
+              name: {{ .name }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "activault.fullname" . }}-proxy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "activault.fullname" . }}-proxy
+spec:
+  selector:
+    app: {{ include "activault.fullname" . }}-proxy
+  ports:
+    {{- range .Values.proxy.services }}
+    - port: {{ .port }}
+      targetPort: {{ .port }}
+      name: {{ .name }}
+    {{- end }}
+{{- end }}

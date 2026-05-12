@@ -1,0 +1,167 @@
+#+title: Logging & Metrics
+#+OPTIONS: toc:2
+
+* Overview
+
+We want to track activault S3 storage metrics: how many models have stored
+activations, how many tokens each, how much space it takes. Plus standard infra
+health (disk, S3 latency, cluster status) and pipeline run metrics.
+
+The monitoring stack is *kube-prometheus-stack* (Prometheus + Grafana + Alertmanager
+in one Helm install) with three metric sources:
+
+1. *Garage* -- infra metrics (S3 ops, disk, cluster health) via =/metrics= on port 3903
+2. *Argo/KFP* -- pipeline run metrics (workflow counts, durations, errors)
+3. *Custom exporter* (=exporters/activault-exporter/=) -- per-model/per-hook storage metrics parsed from S3 objects
+
+*Key insight:* Garage metrics are entirely infrastructure-level -- no per-bucket or
+per-prefix breakdowns. You cannot tell how much storage model X uses from Garage
+alone. A custom exporter that reads S3 object metadata is required for semantic metrics.
+
+* Available metric sources
+
+** Garage (port 3903, =/metrics=)
+
+Shares port with admin API. ~40 metrics in seven categories:
+
+| Category        | Key metrics                                                   | Use for                     |
+|-----------------+---------------------------------------------------------------+-----------------------------|
+| System          | =garage_local_disk_avail=, =garage_local_disk_total=          | Disk capacity planning      |
+| Cluster health  | =cluster_healthy=, =cluster_available=, =cluster_*_nodes=     | Alerting on outages         |
+| S3 API          | =api_s3_request_counter=, =api_s3_request_duration= (histo)   | Throughput & latency        |
+| Block manager   | =block_bytes_read/written=, =block_resync_errored_blocks=     | I/O health, alert on errors |
+| RPC             | =rpc_netapp_*_counter=, =rpc_duration=                        | Inter-node health           |
+
+If =metrics_token= is set in Garage config, Prometheus must send =Authorization: Bearer <token>=.
+Env var =GARAGE_METRICS_TOKEN= overrides the config file value.
+
+** KFP / Argo Workflow Controller
+
+- *KFP API Server* (=ml-pipeline=): =/metrics= on port 8888, pipeline/experiment/run counters
+- *Argo Controller*: =:9090/metrics= -- the richer source:
+  - =argo_workflows_count{status}= -- workflows by phase
+  - =argo_workflows_pods_count{status}=
+  - =argo_workflows_error_count{cause}=
+  - =argo_workflows_operation_duration_seconds=
+- Argo supports custom per-workflow metrics in the workflow YAML spec
+
+** Custom exporter (=exporters/activault-exporter/=)
+
+Python exporter (Deployment, port 9400) that lists S3 objects, parses =cfg.json=
+metadata, and exposes per-run/per-hook gauges. Polls every 5 minutes.
+
+Bucket-level:
+- =activault_storage_total_bytes=, =activault_storage_total_objects=
+
+Per-run (labeled =run=, =model=):
+- =activault_bytes_per_run= -- storage bytes
+- =activault_run_tokens= -- total tokens from =cfg.json=
+- =activault_run_completeness_ratio= -- =batches_processed / n_batches=
+
+Per-hook (labeled =run=, =model=, =hook=):
+- =activault_bytes_per_hook=, =activault_objects_per_hook=
+
+Summary gauges for dashboard tables (value=bytes, all config as labels):
+- =activault_run_summary= -- model, dtype, d_model, dataset, batch_size, seq_length,
+  tokens, batches done/target, completeness, expected files
+- =activault_hook_summary= -- objects, expected files, completeness
+
+Image built with =eval $(minikube docker-env) && docker build -t activault-exporter:latest exporters/activault-exporter/=.
+Deployed via Helm template =activault/templates/deployment-exporter.yaml= (Deployment + Service + ServiceMonitor).
+
+* Deployment plan
+
+** 1. Install kube-prometheus-stack
+
+#+begin_src sh :session *activault* :async
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+kubectl create namespace monitoring
+helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  -n monitoring -f monitoring/prometheus-values.yaml
+#+end_src
+
+** 2. Deploy activault chart (with monitoring enabled)
+
+#+begin_src sh :session *activault* :async
+helm upgrade --install activault ./activault
+#+end_src
+
+This enables:
+- Garage metrics Service on port 3903 (=garage.monitoring.metrics.enabled=)
+- ServiceMonitor CRD for Prometheus auto-discovery (=garage.monitoring.metrics.serviceMonitor.enabled=)
+- Garage Grafana dashboard ConfigMap in =monitoring= namespace (=configmap-dashboard-garage.yaml=)
+- Grafana proxied on =:8086= via the nginx proxy
+
+Cross-namespace ServiceMonitor discovery is configured in =monitoring/prometheus-values.yaml=
+(=serviceMonitorSelectorNilUsesHelmValues: false=, =serviceMonitorNamespaceSelector: {}=).
+Without this, Prometheus *silently* ignores Garage's ServiceMonitor.
+
+** 3. Access Grafana
+
+Grafana is available at =:8086= via the proxy (see [[file:activault_k8s.org][Accessing UIs]]).
+Default creds: =admin= / =prom-operator=.
+
+The Garage dashboard is auto-provisioned from =activault/dashboards/garage.json=
+(official JSON from Garage repo at =script/telemetry/=, not on grafana.com).
+
+** 4. Build and deploy custom exporter
+
+#+begin_src sh :session *activault* :async
+eval $(minikube docker-env)
+docker build -t activault-exporter:latest exporters/activault-exporter/
+helm upgrade --install activault ./activault
+#+end_src
+
+** 5. Argo/KFP ServiceMonitors (TODO)
+
+Argo controller and KFP API server need manual ServiceMonitors since they lack
+scrape annotations by default. Argo dashboard on grafana.com: *ID 21393* (v3.6+).
+
+* Dashboards
+
+All dashboards are auto-provisioned via ConfigMaps with =grafana_dashboard=1= label.
+Dashboard JSONs live in =activault/dashboards/= and are deployed by the Helm chart.
+
+** Garage infrastructure (=activault/dashboards/garage.json=)
+
+Official dashboard from the Garage repo (=script/telemetry/=, not on grafana.com).
+Patched to use =job="activault-garage-metrics"= (derived from metrics Service name).
+
+Panels: S3 API request rates by endpoint, block read/write throughput, disk
+utilization, cluster health, RPC latencies, resync queue/errors.
+
+Key PromQL:
+- Disk usage: =1 - (garage_local_disk_avail{volume="data"} / garage_local_disk_total{volume="data"})=
+- S3 throughput: =rate(api_s3_request_counter[5m])=
+- S3 p99: =histogram_quantile(0.99, rate(api_s3_request_duration_bucket[5m]))=
+- Alert: =block_resync_errored_blocks > 0= or =cluster_healthy == 0=
+
+** Activault storage (=activault/dashboards/activault-storage.json=)
+
+Custom dashboard showing per-run and per-hook storage details from the exporter.
+
+Top row (stat panels):
+- Total storage, total objects, total tokens, run count, daily growth, tokens/byte
+
+Run Details table (one row per run, from =activault_run_summary=):
+- Run, model, dtype, d_model, dataset, batch_size, seq_length
+- Tokens, storage bytes, batches done/target, completeness %, expected files
+
+Per-Hook Details table (from =activault_hook_summary=):
+- Run, model, hook, storage bytes, actual objects, expected files, completeness %
+
+Bar gauges: storage by run, storage by hook
+
+Time series: total storage over time, 30-day projection (=predict_linear=)
+
+** Kubernetes (built-in)
+
+kube-prometheus-stack ships ~20 dashboards: API server, nodes, pods, kubelet,
+persistent volumes, workloads, etc. No customization needed.
+
+** Pipeline runs (TODO)
+
+Argo workflow status, error rate, per-model collection duration.
+Argo dashboard on grafana.com: *ID 21393* (v3.6+). Needs ServiceMonitor for
+Argo controller (=:9090=) and KFP API server (=:8888=).
