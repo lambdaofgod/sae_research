@@ -1,0 +1,17 @@
+[project]
+name = "alternative-saes"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "evoc",
+    "hdbscan>=0.8.42",
+    "ipykernel>=7.2.0",
+    "matplotlib>=3.10.9",
+    "pandas>=2.3.3",
+    "pyarrow>=24.0.0",
+]
+
+[tool.uv.sources]
+evoc = { git = "https://github.com/TutteInstitute/evoc.git", rev = "release-0.3.1" }
