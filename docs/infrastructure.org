@@ -1,0 +1,606 @@
+#+title: Infrastructure
+#+OPTIONS: toc:2
+
+Technical documentation for the Kubernetes platform behind SAE training:
+activation collection (Activault on Kubeflow Pipelines), S3 storage (Garage),
+experiment tracking (MLflow), monitoring (Prometheus and Grafana) and GPU
+training jobs (Kubeflow Trainer v2).
+
+Everything here was checked against the repository on 2026-10-07. The
+repository is the source of truth: paths are relative to the repository root,
+and every file, command, name and port named below exists in it. Claims that
+only a running cluster can confirm are marked =UNVERIFIED= and collected in
+[[*Open live checks]]. For the package side (training entry points, configs,
+artifacts, evaluation) see =docs/package.org= once it exists; for planning and
+history see =infra/TASKS.org=.
+
+* Overview
+
+** Pipeline
+
+#+begin_example
+ 1. ACTIVATION COLLECTION            2. SAE TRAINING                3. SAE EVALUATION
+    KFP run on a GPU node               runner.py on a GPU            sae_bench core eval
+    (Activault collector image)         (Trainer v2 runtime: planned)  logs back to MLflow
+            |                                   |      ^                       ^
+            | shards                            |      | shards                | ae.pt + config.json
+            v                                   v      |                       |
+ +-------------------------------- Garage (S3) ----------------------------------------+
+ |   activations/                          mlflow-artifacts/                           |
+ +-------------------------------------------------------------------------------------+
+                                                ^
+                                                | params, metrics, artifact URIs
+                                        MLflow server (PostgreSQL)
+#+end_example
+
+** Components
+
+| Component                  | Kubernetes object(s)                                          | Namespace            | Defined in                                                    | State                      |
+|----------------------------+---------------------------------------------------------------+----------------------+---------------------------------------------------------------+----------------------------|
+| Garage (S3)                | StatefulSet =activault-garage=, Services =activault-garage=, =activault-garage-metrics=, =activault-garage-headless= | default | vendored subchart =infra/activault/activault/charts/garage/= (chart 0.9.2, Garage v2.2.0) | deployed                  |
+| Garage bootstrap           | Job =activault-garage-bootstrap= (Helm hook)                  | default              | =infra/activault/activault/templates/job-garage-bootstrap.yaml= | deployed                 |
+| S3 credentials             | Secret =activault-s3-creds=                                   | default (copied to kubeflow) | =templates/secret-s3.yaml=                            | deployed                   |
+| Activault exporter         | Deployment, Service, ServiceMonitor =activault-exporter= (:9400) | default           | =templates/deployment-exporter.yaml=, =infra/activault/exporters/activault-exporter/= | deployed |
+| PostgreSQL                 | StatefulSet, Service =activault-postgres= (:5432)             | default              | =templates/statefulset-postgres.yaml=                         | deployed                   |
+| MLflow                     | Deployment, Service =activault-mlflow= (:5000)                | default              | =templates/deployment-mlflow.yaml=, =templates/secret-mlflow.yaml= | deployed              |
+| UI proxy                   | Deployment, Service, ConfigMap =activault-proxy= (8081-8086)  | default              | =templates/proxy.yaml=                                        | deployed                   |
+| Grafana dashboards         | ConfigMaps =activault-garage-dashboard=, =activault-activault-dashboard= | monitoring | =templates/configmap-dashboard-*.yaml=, =dashboards/*.json=   | deployed                   |
+| kube-prometheus-stack      | Prometheus, Grafana, Alertmanager                             | monitoring           | =infra/activault/monitoring/prometheus-values.yaml= (separate Helm release) | deployed       |
+| Kubeflow Pipelines         | standalone install (kustomize)                                | kubeflow             | not in the repo; version 2.15.0 =UNVERIFIED=                  | deployed                   |
+| Collection pipeline        | KFP run =activault-collect=, one GPU task                     | kubeflow             | =infra/activault/pipelines/activault/collect_pipeline.py=     | in use                     |
+| Kubeflow Trainer v2        | controller + JobSet                                           | kubeflow-system      | not in the repo; OCI Helm chart 2.2.0 =UNVERIFIED=            | installed per =infra/TASKS.org= |
+| Training runtime           | ClusterTrainingRuntime =sae-single-gpu=                       | cluster              | =infra/activault/training-runtime.yaml=                       | manifest only, see [[*Training jobs]] |
+| Dagster orchestrator       | -                                                             | -                    | -                                                             | planned (=infra/TASKS.org=) |
+
+All chart resources are named =activault-<thing>= because the Helm release is
+called =activault= and the chart is called =activault= (see
+=templates/_helpers.tpl=).
+
+** Namespaces
+
+- =default=: the Helm chart (Garage, MLflow, exporter, proxy, secrets).
+- =kubeflow=: Kubeflow Pipelines and the Argo workflows it creates. Needs its
+  own copy of =activault-s3-creds= and =hf-token-secret=.
+- =monitoring=: kube-prometheus-stack and the dashboard ConfigMaps. The chart
+  hard-codes this namespace in =templates/configmap-dashboard-*.yaml=.
+- =kubeflow-system=: Kubeflow Trainer v2 controller.
+
+** Ports
+
+Through the proxy (=values.yaml=, =proxy.services=):
+
+| Port | Upstream                                                      | What                 |
+|------+---------------------------------------------------------------+----------------------|
+| 8081 | =kubernetes-dashboard.kubernetes-dashboard.svc:80=            | Kubernetes dashboard |
+| 8082 | =ml-pipeline-ui.kubeflow.svc:80=                              | KFP UI               |
+| 8083 | =activault-garage-0.activault-garage-headless.default.svc:3903= | Garage admin API   |
+| 8084 | =activault-garage.default.svc:3900=                           | Garage S3 API        |
+| 8085 | =activault-mlflow.default.svc:5000=                           | MLflow               |
+| 8086 | =kube-prometheus-stack-grafana.monitoring.svc:80=             | Grafana              |
+
+Direct service ports: Garage S3 3900 and web 3902 on =activault-garage=;
+Garage admin and metrics 3903 on the headless =activault-garage-metrics=;
+MLflow 5000; PostgreSQL 5432; exporter 9400; KFP API server =ml-pipeline= 8888
+in =kubeflow=.
+
+** Secrets
+
+| Secret                         | Keys                                                                                      | Created by                                  |
+|--------------------------------+-------------------------------------------------------------------------------------------+---------------------------------------------|
+| =activault-s3-creds=           | =AWS_ACCESS_KEY_ID=, =AWS_SECRET_ACCESS_KEY=, =AWS_ENDPOINT_URL=, =S3_ENDPOINT_URL=, =AWS_DEFAULT_REGION= | chart; keys generated on first install, kept on upgrade |
+| =activault-garage-rpc-secret=  | =adminToken= (plus RPC secret)                                                            | Garage subchart                             |
+| =activault-mlflow-db=          | =POSTGRES_PASSWORD= (generated), =POSTGRES_USER= and =POSTGRES_DB= (both =mlflow=)         | chart                                       |
+| =hf-token-secret=              | =token=                                                                                   | by hand, see [[*Deployment]]                |
+
+The S3 endpoint inside the cluster is =http://activault-garage.default:3900=
+(FQDN so it resolves from =kubeflow=), region =garage=. Which variable each
+consumer reads:
+
+| Consumer                         | Variable(s)                                               | Source                          |
+|----------------------------------+-----------------------------------------------------------+---------------------------------|
+| Activault collector (KFP task)   | =S3_ENDPOINT_URL= (and =AWS_ENDPOINT_URL=)                | secret, mapped in the pipeline  |
+| MLflow server                    | =MLFLOW_S3_ENDPOINT_URL=                                  | secret key =AWS_ENDPOINT_URL=   |
+| Exporter                         | =S3_ENDPOINT=, =S3_BUCKET=                                | chart values                    |
+| Training code (=sae_research=)   | =AWS_ENDPOINT_URL=, falling back to =S3_ENDPOINT_URL=     | environment                     |
+| MLflow clients (training, eval)  | =MLFLOW_TRACKING_URI=, =MLFLOW_S3_ENDPOINT_URL=           | environment                     |
+
+* Deployment
+
+Prerequisites: a cluster with a GPU node (so far a single-node minikube,
+=UNVERIFIED=), =kubectl=, =helm= (=infra/activault/scripts/get_helm.sh= is the
+upstream installer script), and access to the cluster's Docker daemon for
+locally built images (=eval $(minikube docker-env)=). All commands below run
+from =infra/activault/=.
+
+1. Install the monitoring stack first. The chart renders ServiceMonitors and
+   puts ConfigMaps into =monitoring=, so the CRDs and the namespace must exist
+   before step 3.
+   #+begin_src sh
+   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+   helm repo update
+   kubectl create namespace monitoring
+   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+     -n monitoring -f monitoring/prometheus-values.yaml
+   #+end_src
+
+2. Build the local images (pull policy is =Never= for both):
+   #+begin_src sh
+   eval $(minikube docker-env)
+   docker build -t activault-flashattn:latest -f pipelines/activault/Dockerfile.flashattn pipelines/activault/
+   docker build -t activault-exporter:latest exporters/activault-exporter/
+   #+end_src
+   The exporter image must exist before step 3, otherwise its pod stays in
+   =ErrImageNeverPull=.
+
+3. Install the chart:
+   #+begin_src sh
+   helm upgrade --install activault ./activault
+   #+end_src
+   This creates everything in the components table that lives in =default=
+   plus the two dashboard ConfigMaps. The post-install/post-upgrade hook job
+   waits for Garage, assigns a layout (zone =dc1=, 200 GiB per node), imports
+   the S3 key =activault-key= from =activault-s3-creds=, and creates the
+   buckets =activations= and =mlflow-artifacts= with read/write/owner
+   permission for that key. It is idempotent, so re-running the upgrade is
+   safe; the S3 and PostgreSQL secrets are looked up and preserved across
+   upgrades.
+
+4. Create the HuggingFace token secret (gated models such as gemma-2):
+   #+begin_src sh
+   kubectl create secret generic hf-token-secret --from-file=token=$HOME/.keys/hf_token.txt
+   #+end_src
+
+5. Install Kubeflow Pipelines standalone (version used so far 2.15.0,
+   =UNVERIFIED=):
+   #+begin_src sh
+   export PIPELINE_VERSION=2.15.0
+   kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref=$PIPELINE_VERSION"
+   kubectl wait --for condition=established --timeout=60s crd/applications.app.k8s.io
+   kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic?ref=$PIPELINE_VERSION"
+   kubectl wait --for=condition=Ready pod --all -n kubeflow --timeout=300s
+   #+end_src
+
+6. Copy the secrets KFP tasks need into =kubeflow=. Repeat after every
+   =helm upgrade= that changes them.
+   #+begin_src sh
+   kubectl get secret activault-s3-creds -o yaml | sed 's/namespace: default/namespace: kubeflow/' | kubectl apply -n kubeflow -f -
+   kubectl get secret hf-token-secret -o yaml | sed 's/namespace: default/namespace: kubeflow/' | kubectl apply -n kubeflow -f -
+   #+end_src
+
+7. Install Kubeflow Trainer v2 and the training runtime (see [[*Training jobs]]
+   for what is still missing before a job can run):
+   #+begin_src sh
+   helm install kubeflow-trainer oci://ghcr.io/kubeflow/charts/kubeflow-trainer \
+     --namespace kubeflow-system --create-namespace --version 2.2.0
+   kubectl apply -f training-runtime.yaml
+   #+end_src
+
+Upgrade: rebuild images if their sources changed, then repeat step 3 (and
+step 6 if secrets changed). Teardown: =helm uninstall activault= removes the
+workloads but not the PersistentVolumeClaims of the Garage and PostgreSQL
+StatefulSets (1200Gi data, 1Gi meta, 10Gi database); delete those explicitly.
+
+Not a working path: =pipelines/activault/deploy.sh= predates the KFP pipeline,
+resolves the chart directory wrongly and applies =collector-job*.yaml=
+manifests that no longer exist.
+
+* Local access
+
+=scripts/with-k8s-env.sh= wraps a command with everything a workstation client
+needs. It reads =AWS_ACCESS_KEY_ID=, =AWS_SECRET_ACCESS_KEY= and
+=AWS_DEFAULT_REGION= from the =activault-s3-creds= secret, exports
+=AWS_ENDPOINT_URL= and =MLFLOW_S3_ENDPOINT_URL= as =http://localhost:3900= and
+=MLFLOW_TRACKING_URI= as =http://localhost:8085=, starts any missing
+port-forward, then execs the command:
+
+| Local port | Forward                                   | Used for                  |
+|------------+-------------------------------------------+---------------------------|
+| 8085       | =svc/activault-proxy= 8085 (default)      | MLflow                    |
+| 3900       | =svc/activault-garage= 3900 (default)     | S3 API                    |
+| 8087       | =svc/ml-pipeline= 8888 (kubeflow)         | KFP API (SDK =--host=)    |
+
+#+begin_src sh
+bash scripts/with-k8s-env.sh uv run python -m sae_research.training.runner --config run.yaml
+#+end_src
+
+It falls back to =minikube kubectl --= when =kubectl= is not on the path, and
+it is Linux-only because it detects running port-forwards with =ss=.
+
+For the UIs, forward the proxy once:
+
+#+begin_src sh
+kubectl port-forward --address 0.0.0.0 svc/activault-proxy 8081:8081 8082:8082 8083:8083 8084:8084 8085:8085 8086:8086
+#+end_src
+
+Then =:8081= Kubernetes dashboard, =:8082= KFP UI, =:8083= Garage admin API
+(Bearer token from =activault-garage-rpc-secret=), =:8084= Garage S3 API,
+=:8085= MLflow, =:8086= Grafana (login =admin= / =prom-operator=, the chart
+default, =UNVERIFIED=).
+
+* Activation collection
+
+[[https://github.com/tilde-research/activault][Activault]] (pinned at commit
+=db6d1e4=) runs an LLM over a HuggingFace dataset and uploads activation
+shards for a list of hook points to Garage. On this platform one collection
+run is one KFP pipeline run with a single GPU task.
+
+| File (=infra/activault/pipelines/activault/=) | Purpose                                                                          |
+|-----------------------------------------------+----------------------------------------------------------------------------------|
+| =collect_pipeline.py=                         | pipeline definition, compile and submit CLI                                      |
+| =config.yaml=                                 | the run config submitted so far (gemma-2-2b-it, layer 13); read only with =--submit --config= |
+| =activault_pipeline.yaml=                     | a previously compiled pipeline spec                                              |
+| =Dockerfile.flashattn=                        | collector image =activault-flashattn:latest= (recommended): prebuilt flash-attn 2.7.4, PyTorch 2.7.0, CUDA 12.8 base |
+| =Dockerfile=                                  | slower variant on =pytorch/pytorch:2.3.0= devel, builds flash-attn from source   |
+| =pyproject.toml=, =datasets.json=             | copied into the image: Activault's package metadata and =activault= entrypoint, and the dataset registry (=monology/pile-uncopyrighted=) |
+| =check_kfp_logs.sh=                           | tail the main container of the latest workflow matching a prefix                 |
+| =monitor_upload.py=                           | upload speed and ETA from Garage bucket size                                     |
+| =deploy.sh=                                   | broken, see [[*Deployment]]                                                      |
+
+Both Dockerfiles install =transformers==4.49.0= and Activault's dependencies
+explicitly; =pyproject.toml= is only used for =pip install -e . --no-deps=.
+
+** Pipeline parameters
+
+The pipeline function exposes twelve parameters, which =--submit= fills from
+the config file:
+
+| Parameter            | From config key                          | Default in the pipeline                                  |
+|----------------------+------------------------------------------+----------------------------------------------------------|
+| =run_name=           | =run_name=                               | =gemma2_2b=                                              |
+| =model_name=         | =transformer_config.model_name=          | =google/gemma-2-2b-it=                                   |
+| =dtype=              | =transformer_config.dtype=               | =bfloat16=                                               |
+| =n_batches=          | =data_config.n_batches=                  | 3600                                                     |
+| =seq_length=         | =data_config.seq_length=                 | 256                                                      |
+| =batch_size=         | =data_config.batch_size=                 | 64                                                       |
+| =seed=               | =data_config.seed=                       | 42                                                       |
+| =start_batch=        | =data_config.start_batch=                | 0                                                        |
+| =batches_per_upload= | =upload_config.batches_per_upload=       | 4                                                        |
+| =hooks=              | =upload_config.hooks= (joined with =,=)  | =models.layers.13.self_attn.post,models.layers.13.mlp.post= |
+| =bucket_name=        | =data_config.bucket_name=                | =activations=                                            |
+| =dataset=            | =data_config.data_key=                   | =monology/pile-uncopyrighted=                            |
+
+Hooks travel as one comma-separated string because KFP parameters are scalar.
+Everything else in Activault's config is hard-coded in the component and
+cannot be changed from =config.yaml=: =num_runs: 1=, =cache_dir: /cache=,
+=max_per_device_memory: 24GB=, =skip_cache: false=, =clean_added_tokens: false=,
+=clean_default_system_prompt: false=.
+
+The task is configured with: 16Gi memory request, 32Gi limit, one
+=nvidia.com/gpu=; =activault-s3-creds= as env (=AWS_*= keys, and
+=AWS_ENDPOINT_URL= mapped a second time to =S3_ENDPOINT_URL=, which is what
+Activault reads; the secret also carries =S3_ENDPOINT_URL= directly, so the
+second mapping is redundant); =HF_TOKEN= from =hf-token-secret=; a 16Gi
+in-memory =emptyDir= on =/dev/shm=; image pull policy =Never=; a 3-day
+timeout; caching off; no retries; a toleration for =nvidia.com/gpu=; and the
+=cluster-autoscaler.kubernetes.io/safe-to-evict: "false"= annotation.
+
+The component is a =@dsl.component(base_image="activault-flashattn:latest",
+packages_to_install=[])= whose body writes the config to =/tmp/config.yaml=
+and runs =activault collect --config /tmp/config.yaml=. Imports live inside
+the function because KFP serializes its source. =@dsl.container_component= was
+tried first and abandoned: its =ConcatPlaceholder= parameters are not resolved
+inside =sh -c= / =python -c= wrappers and arrive as literal JSON.
+
+** Submitting a run
+
+Run the CLI from the repository root. The pipeline directory has its own
+=pyproject.toml= (Activault's), so =uv run= inside it would try to set up
+that project instead of this one.
+
+#+begin_src sh
+# compile only
+uv run python infra/activault/pipelines/activault/collect_pipeline.py /tmp/activault_pipeline.yaml
+
+# compile and submit; --config is required with --submit
+bash scripts/with-k8s-env.sh uv run python infra/activault/pipelines/activault/collect_pipeline.py \
+  /tmp/activault_pipeline.yaml --submit \
+  --config infra/activault/pipelines/activault/config.yaml \
+  --host http://localhost:8087
+#+end_src
+
+=OUTPUT= is a required positional argument. The default =--host= is
+=http://localhost:8081=, which on the proxy is the Kubernetes dashboard, so
+pass the KFP API forward explicitly. Runs land in the KFP experiment
+=activault= under the config's =run_name=, with caching disabled.
+
+** Monitoring and cleaning up a run
+
+#+begin_src sh
+infra/activault/pipelines/activault/check_kfp_logs.sh activault-collect 30   # last 30 lines
+infra/activault/pipelines/activault/check_kfp_logs.sh activault-collect      # full log
+python3 infra/activault/pipelines/activault/monitor_upload.py --watch 60 --total-gb 1012.5
+#+end_src
+
+Both scripts call =minikube kubectl --= directly. =monitor_upload.py= needs
+=fire= in the system =python3=, reaches the admin API through a temporary
+=kubectl run curl-monitor= pod, and hard-codes a =BUCKET_ID= that belongs to
+one specific cluster; update it after a fresh install.
+
+Deleting a run from the KFP UI or client does not always remove the Argo
+workflow, and deleting only the workflow leaves the KFP run as RUNNING. Do
+both:
+
+#+begin_src sh
+kubectl delete workflows -n kubeflow --all      # the GPU pods
+# then delete the run in the KFP UI, or client.delete_run(run_id)
+#+end_src
+
+* Storage
+
+Garage runs from the vendored subchart with =replicationFactor: 1= and one
+replica, a 1200Gi data volume and a 1Gi metadata volume (=values.yaml=,
+=garage=). The vendored chart carries local changes for =adminToken= handling,
+so do not re-vendor it from upstream blindly. The bootstrap job assigns each
+node 200 GiB of layout capacity in zone =dc1=.
+
+Access: S3 API on =activault-garage:3900= (region =garage=), admin API on
+=activault-garage-0.activault-garage-headless:3903= with
+=Authorization: Bearer <adminToken>=; see [[*Ports]] and [[*Secrets]].
+
+Buckets, both created by the bootstrap job and owned by =activault-key=:
+
+- =activations=: Activault output, read by training.
+- =mlflow-artifacts=: MLflow artifact store, MLflow's standard
+  =<experiment_id>/<run_id>/artifacts/= layout.
+
+Layout of =activations= as the code reads it:
+
+#+begin_example
+activations/
+  <run_name>/                     e.g. gemma2_2b
+    cfg.json                      full Activault config plus progress
+    <hook_name>/                  e.g. models.layers.13.mlp.post
+      metadata.json               shape and dtype of the shards; required by the training reader
+      statistics.json             optional
+      <shard>.saved.pt            activation shards (UNVERIFIED: naming <uuid>--<batch>_<run>.saved.pt, ~300MB each)
+#+end_example
+
+- The training reader (=dictionary_learning.activault_s3_buffer.S3RCache=,
+  wrapped by =sae_research/training/utils.py=) is pointed at the prefix
+  =<run_name>/<hook_name>= (=activault.s3_prefix= in
+  =sae_research/training/configs/models.yaml=), reads =<prefix>/metadata.json=
+  for =shape= and =dtype=, then streams the shards. A prefix without
+  =metadata.json= is not a usable cache; =smoke_tests/smoke_test_activault_training.py=
+  lists caches by that file.
+- The exporter reads =<run_name>/cfg.json= for =transformer_config.model_name=
+  and =dtype=, =data_config.n_batches=, =data_key=, =batch_size=, =seq_length=,
+  =upload_config.hooks=, and the progress fields =total_tokens=,
+  =batches_processed=, =n_total_files=, =d_model=. Other fields: =UNVERIFIED=.
+
+Admin cheatsheet (through the proxy on 8083):
+
+#+begin_src sh
+TOKEN=$(kubectl get secret activault-garage-rpc-secret -o jsonpath='{.data.adminToken}' | base64 -d)
+curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8083/v2/ListBuckets"
+curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8083/v2/GetBucketInfo?id=<BUCKET_ID>"
+#+end_src
+
+=infra/activault/scripts/test-alias.sh= is a scratch script that tries the
+alias API formats against a hard-coded bucket id; the working format is the
+one the bootstrap job uses (=AddBucketAlias= with =globalAlias=).
+
+* MLflow
+
+** Server
+
+- Deployment =activault-mlflow=, image =ghcr.io/mlflow/mlflow:v3.10.1=. The
+  container pip-installs =psycopg2-binary= and =boto3= at start, waits for
+  PostgreSQL in an init container, and runs =mlflow server= on port 5000 with
+  =--disable-security-middleware=, =--backend-store-uri postgresql://mlflow:...@activault-postgres:5432/mlflow=
+  and =--default-artifact-root s3://mlflow-artifacts/=. Readiness probe on
+  =/health=.
+- PostgreSQL: StatefulSet =activault-postgres=, =postgres:16-alpine=, 10Gi
+  volume, credentials from =activault-mlflow-db=.
+- Artifacts: run artifact URIs are =s3://mlflow-artifacts/...=, so clients
+  read and write artifacts directly against Garage and need
+  =MLFLOW_S3_ENDPOINT_URL= plus the S3 credentials, not only the tracking
+  URI. The server itself gets =MLFLOW_S3_ENDPOINT_URL= from the S3 secret.
+- =--disable-security-middleware= turns off MLflow 3.x host-header checking,
+  which otherwise rejects the different DNS names the service is reached by
+  from other namespaces (=UNVERIFIED=; the flag is set). Acceptable while the
+  cluster has no public ingress (=UNVERIFIED=); switch to =--allowed-hosts=
+  if that changes.
+
+Access: =http://localhost:8085= through the proxy or =with-k8s-env.sh=;
+=http://activault-mlflow.default.svc:5000= from inside the cluster (this is
+what =training-runtime.yaml= sets).
+
+** Client conventions (=sae_research/training/mlflow_logging.py=)
+
+- =MLFLOW_TRACKING_URI= is mandatory. =configure_tracking_uri()= runs at the
+  training entry points and exits with an error when it is unset; the value
+  =local= selects a file store at =./mlruns= with a warning. This exists
+  because MLflow otherwise falls back to a local store silently and runs never
+  show up in the cluster UI.
+- One flat run per training job, grouped by experiment name; there are no
+  parent/child runs. The experiment comes from the =mlflow_experiment= key of
+  the run YAML; when it is empty nothing is logged.
+- Run name: =<TrainerClass>_<sparsity param><value>_d<dict_size>_lr<lr>_s<seed>=,
+  for example =BatchTopKTrainer_k64_d16384_lr0.0001_s0=. Tags =trainer_class=
+  and =dict_class=; every scalar key of the trainer config is logged as a
+  param.
+- Step metrics (loss, L0, variance explained, trainer-specific values) every
+  =log_steps=; =ae.pt= and =config.json= are logged as artifacts when
+  training ends.
+- Evaluation metrics are logged back onto the training run by
+  =sae_research.eval.components.log_eval_to_mlflow(run_id, metrics, tags)=,
+  which requires an =experiment_name= tag; core-eval metrics are prefixed
+  =core_=. There is no automatic eval pass; evaluation is run by hand.
+
+* Monitoring
+
+** Stack
+
+kube-prometheus-stack in =monitoring=, values in
+=infra/activault/monitoring/prometheus-values.yaml=: ServiceMonitors and
+PodMonitors are discovered in all namespaces (the =*NilUsesHelmValues: false=
+settings; without them Prometheus silently ignores monitors outside its own
+release), 15 days retention on a 50Gi volume, Grafana with the dashboard
+sidecar watching label =grafana_dashboard=1= in all namespaces and a 10Gi
+volume, Alertmanager enabled. No alert rules are defined anywhere in the
+repository.
+
+** Metric sources
+
+- Garage: =/metrics= on port 3903 of the headless =activault-garage-metrics=
+  service, scraped every 15s by the subchart's ServiceMonitor
+  (=garage.monitoring.metrics= in =values.yaml=). Garage metrics are
+  infrastructure-level only (disk, API, RPC, queues); nothing is broken down
+  per bucket or prefix. Metric names and whether a metrics token is required:
+  =UNVERIFIED=.
+- Activault exporter (=infra/activault/exporters/activault-exporter/exporter.py=):
+  lists the =activations= bucket every =POLL_INTERVAL= (300s from
+  =values.yaml=), parses each run's =cfg.json=, and serves gauges on port 9400
+  (=PORT=), scraped every 60s under job =activault-exporter=. Env:
+  =S3_ENDPOINT=, =S3_BUCKET=, =AWS_ACCESS_KEY_ID=, =AWS_SECRET_ACCESS_KEY=,
+  =AWS_DEFAULT_REGION=, =POLL_INTERVAL=, =PORT=.
+
+  | Metric                               | Labels                          | Meaning                                            |
+  |--------------------------------------+---------------------------------+----------------------------------------------------|
+  | =activault_storage_total_bytes=      | -                               | bucket size                                        |
+  | =activault_storage_total_objects=    | -                               | object count (includes =cfg.json=, =metadata.json=) |
+  | =activault_bytes_per_run=            | run, model                      | bytes under =<run>/=                               |
+  | =activault_run_tokens=               | run, model                      | =total_tokens= from =cfg.json=                     |
+  | =activault_run_completeness_ratio=   | run, model                      | =batches_processed / n_batches=                    |
+  | =activault_bytes_per_hook=           | run, model, hook                | bytes under =<run>/<hook>/=                        |
+  | =activault_objects_per_hook=         | run, model, hook                | objects under =<run>/<hook>/= (shards plus metadata files) |
+  | =activault_run_summary=              | run, model, dtype, d_model, dataset, batch_size, seq_length, tokens, batches_done, batches_target, completeness_pct, files_expected | value = bytes; one row per run for tables |
+  | =activault_hook_summary=             | run, model, hook, objects, files_expected, completeness_pct | value = bytes; one row per hook      |
+
+- Argo workflow controller and KFP API server expose metrics but have no
+  ServiceMonitor yet (open TODO in =infra/TASKS.org=).
+
+** Dashboards
+
+Provisioned by the chart as ConfigMaps in =monitoring= from
+=infra/activault/activault/dashboards/=:
+
+- =garage.json= ("Garage"): the upstream Garage dashboard, patched to
+  =job="activault-garage-metrics"=. Panels: Disk I/O, API requests, API
+  errors, Web requests, Web errors, RPC requests, Resync queue length, Resync
+  errored blocks, Table GC queue length, Table Merkle updater queue length.
+- =activault-storage.json= ("Activault Storage"): Total Storage, Total
+  Objects, Total Tokens, Runs, Daily Growth, Tokens / Byte, Run Details and
+  Per-Hook Details tables (from the two summary gauges), Storage by Run,
+  Storage by Hook, Total Storage Over Time, 30-Day Storage Projection.
+
+Grafana at =:8086= through the proxy; kube-prometheus-stack's own Kubernetes
+dashboards come with it.
+
+* Training jobs
+
+Training today runs =sae_research.training.runner= on a GPU machine through
+=scripts/with-k8s-env.sh=, reading Activault shards from Garage and logging
+to MLflow. Submitting it as a cluster job goes through Kubeflow Trainer v2
+and is not finished.
+
+What exists:
+
+- Kubeflow Trainer v2 controller (OCI chart =kubeflow-trainer= 2.2.0 in
+  =kubeflow-system=, installed per =infra/TASKS.org=, =UNVERIFIED=). It
+  provides the =ClusterTrainingRuntime=, =TrainingRuntime= and =TrainJob=
+  CRDs; JobSet comes bundled.
+- =infra/activault/training-runtime.yaml=: =ClusterTrainingRuntime=
+  =sae-single-gpu= with =mlPolicy.numNodes: 1= (plain single process, no
+  torchrun), one replicated job =node= whose container (also named =node=)
+  uses image =sae-training:latest= with pull policy =Never=, requests 16Gi
+  and limits 32Gi memory plus one =nvidia.com/gpu=, tolerates the GPU taint,
+  carries the =safe-to-evict: "false"= annotation, mounts a 16Gi in-memory
+  =/dev/shm=, takes all of =activault-s3-creds= via =envFrom=, and sets
+  =HF_TOKEN= (from =hf-token-secret=), =MLFLOW_TRACKING_URI=
+  (=http://activault-mlflow.default.svc:5000=), =MLFLOW_S3_ENDPOINT_URL=
+  (=http://activault-garage.default:3900=) and
+  =PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True=. Whether it is applied in
+  the cluster: =UNVERIFIED=.
+
+What is missing before a =TrainJob= can run:
+
+- The image. The Dockerfile that built =sae-training:latest= was deleted
+  together with the KFP training pipeline (commit =818786e=); nothing in the
+  repository builds it now.
+- A command. The runtime sets no =command=; =runner.py= needs
+  =--config <run.yaml>= and no run YAML is checked in (the format is in the
+  module docstring of =sae_research/training/runner.py=).
+- A =TrainJob= manifest or submit script. The shape is:
+  #+begin_src yaml
+  apiVersion: trainer.kubeflow.org/v1alpha1
+  kind: TrainJob
+  metadata:
+    name: my-training-run
+  spec:
+    runtimeRef:
+      apiGroup: trainer.kubeflow.org
+      kind: ClusterTrainingRuntime
+      name: sae-single-gpu
+  #+end_src
+  =runtimePatches= can add volumes, tolerations and node selectors but not
+  change the image, command or env of the =node= container.
+
+Upstream: https://www.kubeflow.org/docs/components/trainer/ and
+https://github.com/kubeflow/trainer. The longer-term plan (Dagster partitioned
+assets submitting one job per config) is in =infra/TASKS.org=.
+
+* Smoke tests
+
+All live in =smoke_tests/= and are plain scripts with a =fire= entry point.
+=scripts/with-k8s-env.sh= is needed only for the one that reads from the
+cluster.
+
+| Script                              | Exercises                                                                                   | Needs                                                          |
+|-------------------------------------+---------------------------------------------------------------------------------------------+----------------------------------------------------------------|
+| =smoke_test_training.py=            | =trainSAE= with a stub Activault buffer for =batch_top_k= and =temporal_batch_top_k=; flat MLflow run, params, metrics, artifacts | =mlflow= CLI (starts a temporary local server); CPU |
+| =smoke_test_eval.py=                | =trainSAE= to MLflow, artifact download, =load_sae_for_eval=, =sae_bench= core eval, =log_eval_to_mlflow= | network (pythia-70m, openwebtext); CPU          |
+| =smoke_test_llm_training.py=        | =run_sae_training= on the live-LLM path (model forward passes, no Activault)                | network; GPU for the default gemma-2-2b, CPU with =--model_name EleutherAI/pythia-70m-deduped --layer 3 --device cpu --steps 20 --warmup_steps 2 --dict_size 1024= |
+| =smoke_test_activault_training.py=  | =create_activault_buffer= over a real cache in Garage, =trainSAE=, clean shutdown of =ResilientS3RCache= (no orphan workers) | cluster S3 via =with-k8s-env.sh= (Linux); =--cache=<prefix>= optional |
+
+#+begin_src sh
+uv run python smoke_tests/smoke_test_training.py
+uv run python smoke_tests/smoke_test_eval.py
+uv run python smoke_tests/smoke_test_llm_training.py
+bash scripts/with-k8s-env.sh uv run python smoke_tests/smoke_test_activault_training.py
+#+end_src
+
+Last local run (macOS, CPU, 2026-10-07): see the end of this section once
+filled in.
+
+* Troubleshooting
+
+| Symptom                                                                 | Cause                                                                                   | Fix                                                                                              |
+|-------------------------------------------------------------------------+-----------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------|
+| Collection run loads the model, then goes silent; GPU idle, no error     | =/dev/shm= is 64MB by default in KFP pods; PyTorch DataLoader workers deadlock           | the pipeline mounts a 16Gi memory =emptyDir= on =/dev/shm=; keep it on any new task              |
+| =helm install= fails: no matches for kind =ServiceMonitor=, or namespace =monitoring= not found | chart depends on the Prometheus Operator CRDs and the =monitoring= namespace | install kube-prometheus-stack first ([[*Deployment]] step 1)                                     |
+| Exporter or collector pod in =ErrImageNeverPull= / =ErrImagePull=        | local image not built into the cluster's Docker daemon                                  | build with =eval $(minikube docker-env)= first; pull policy must stay =Never=                    |
+| KFP task cannot read S3 or HF secrets                                    | secrets live in =default=; KFP pods run in =kubeflow=                                   | copy them ([[*Deployment]] step 6), again after every =helm upgrade= that changes them           |
+| Re-submitted run with the same parameters finishes instantly and writes nothing | KFP result caching                                                               | already disabled (=set_caching_options(False)= and =enable_caching=False=); keep both            |
+| Run deleted in KFP but the GPU pod keeps running, or run stuck in RUNNING | KFP run and Argo workflow are deleted separately                                       | delete both ([[*Monitoring and cleaning up a run]])                                              |
+| Pipeline parameters arrive as literal JSON like ={"Concat": [...]}=      | =@dsl.container_component= placeholders inside a shell wrapper                          | use =@dsl.component= with the collector base image, as the pipeline does                         |
+| Training runs do not appear in the cluster MLflow UI                     | =MLFLOW_TRACKING_URI= unset or =local=                                                  | the entry points now refuse to start when unset; run through =with-k8s-env.sh= or export it      |
+| Artifact download or upload fails from a workstation                     | artifact URIs are =s3://=; client talks to Garage directly                              | =MLFLOW_S3_ENDPOINT_URL=, S3 credentials and the 3900 port-forward (=with-k8s-env.sh= sets all)  |
+| MLflow answers 4xx to in-cluster requests by FQDN                        | MLflow 3.x host-header check                                                            | server runs with =--disable-security-middleware=; use =--allowed-hosts= if an ingress is added   |
+| Training process never exits after the data runs out; VRAM stays allocated; =multiprocessing= children linger | S3 cache workers parked in I/O never see the stop flag (upstream =S3RCache=) | =sae_research/training/resilient_s3_cache.py= terminates them after a timeout; audit with =ps -ef | grep training.runner= before long jobs |
+| Training loop stalls after a corrupt or truncated shard download         | upstream cache kills its worker on =torch.load= failure                                 | =ResilientS3RCache= logs and skips the file                                                      |
+| Training stops before =num_tokens=                                       | the Activault cache is finite and raises =StopIteration=                                | handled: a warning is logged and the final checkpoint records =actual_steps=                     |
+| Prometheus shows no Garage or exporter targets                           | monitors outside the Prometheus release namespace are ignored by default               | the values file sets the =*NilUsesHelmValues: false= selectors; reinstall with it                |
+| Unexpected CUDA kernel recompilation or re-downloads inside KFP tasks    | Argo mounts =emptyDir= scratch volumes over =/.cache=, =/.local=, =/.config=            | observed, not yet a problem; point =HF_HOME= / =TORCH_HOME= elsewhere if it becomes one          |
+
+* Open live checks
+
+Run on the machine with cluster access. When a row is confirmed, delete it
+and the matching =UNVERIFIED= marker above.
+
+| Claim                                                   | Command                                                                                                   | Expected                                   |
+|---------------------------------------------------------+-----------------------------------------------------------------------------------------------------------+--------------------------------------------|
+| KFP version 2.15.0                                      | =kubectl get deploy -n kubeflow ml-pipeline -o jsonpath='{.spec.template.spec.containers[0].image}'=      | image tag =2.15.0=                         |
+| Argo Workflows 3.7.3                                    | =kubectl get deploy -n kubeflow workflow-controller -o jsonpath='{.spec.template.spec.containers[0].image}'= | tag =v3.7.3=                           |
+| Kubernetes 1.35.1, single GPU node, minikube            | =kubectl version=; =kubectl get nodes -o wide=; =kubectl describe nodes | grep nvidia.com/gpu=              | one node, one GPU                          |
+| Proxy upstreams exist                                   | =kubectl get svc -n kubernetes-dashboard kubernetes-dashboard=; =kubectl get svc -n kubeflow ml-pipeline-ui=; =kubectl get svc -n monitoring kube-prometheus-stack-grafana= | all found |
+| Grafana login =admin= / =prom-operator=                 | =kubectl get secret -n monitoring kube-prometheus-stack-grafana -o jsonpath='{.data.admin-password}' | base64 -d= | =prom-operator=                     |
+| Trainer v2 2.2.0 installed                              | =helm list -n kubeflow-system=; =kubectl get crds | grep trainer.kubeflow.org=                           | release present, three CRDs                |
+| =sae-single-gpu= runtime applied                        | =kubectl get clustertrainingruntime sae-single-gpu=                                                      | found                                      |
+| Garage metric names, metrics token                      | =TOKEN=...=; =curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8083/metrics | cut -d'{' -f1 | sort -u= | list of =garage_*=, =api_s3_*=, =rpc_*= names |
+| Shard naming and size                                   | =aws s3 ls s3://activations/gemma2_2b/models.layers.13.mlp.post/ --endpoint-url http://localhost:3900 | head= | =*.saved.pt= files, ~300MB each      |
+| =cfg.json= fields beyond those the exporter reads       | =aws s3 cp s3://activations/gemma2_2b/cfg.json - --endpoint-url http://localhost:3900=                   | document the keys                          |
+| No public ingress                                       | =kubectl get ingress -A=                                                                                  | none                                       |
+| Workstation can read and write MLflow artifacts, Activault path trains and shuts down cleanly | =bash scripts/with-k8s-env.sh uv run python smoke_tests/smoke_test_activault_training.py= | passes                     |
+| LLM path trains on a GPU                                | =uv run python smoke_tests/smoke_test_llm_training.py= (needs =HF_TOKEN= for gemma-2-2b)                 | passes                                     |
+| Upload speed 140-200 MB/s                               | =python3 infra/activault/pipelines/activault/monitor_upload.py --watch 60= during a run                   | in range                                   |
