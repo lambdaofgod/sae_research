@@ -93,7 +93,9 @@ array([[ 0.49671415, -0.46341769,  0.        ],
        [ 0.19686124,  0.        , -0.19686124]])
 #+end_example
 
-Let's see if SSC was able to correctly identify subspaces:
+Let's see if SSC was able to correctly identify subspaces.
+
+OMP runs in float32 torch on the best available device (CUDA, then MPS, then CPU); pass =device=...= to override.
 
 #+BEGIN_SRC python :session ssc.org  :exports both
 start = time.time()
@@ -102,7 +104,7 @@ f"Fit time: {time.time() - start:.3f}s"
 #+END_SRC
 
 #+RESULTS:
-: Fit time: 0.012s
+: Fit time: 0.533s
 
 
 #+BEGIN_SRC python :session ssc.org  :exports both
@@ -136,36 +138,36 @@ We'll check $CX - X$
 
 #+RESULTS:
 #+begin_example
-array([[ 1.0471373 , -1.29938995,  0.        ],
-       [-0.05971871, -0.10453181,  0.        ],
-       [ 0.0683465 ,  0.01418203,  0.        ],
-       [-1.12633954,  1.13686891,  0.        ],
-       [ 0.34722559,  0.84456469,  0.        ],
-       [ 0.1802543 , -0.48820672,  0.        ],
-       [-1.02942829,  0.59674079,  0.        ],
-       [-0.06835992, -0.01418481,  0.        ],
-       [ 0.12672526,  0.3123502 ,  0.        ],
-       [ 0.81278949, -0.46034523,  0.        ],
-       [-0.87933101,  0.        , -0.87933101],
-       [-0.36054146,  0.        , -0.36054146],
-       [ 0.51878955,  0.        ,  0.51878955],
-       [ 0.83843043,  0.        ,  0.83843043],
-       [-0.04193503,  0.        , -0.04193503],
-       [ 0.47539517,  0.        ,  0.47539517],
-       [ 0.56467582,  0.        ,  0.56467582],
-       [ 0.21061974,  0.        ,  0.21061974],
-       [ 0.01432093,  0.        ,  0.01432093],
-       [-0.29462401,  0.        , -0.29462401],
-       [ 0.12063846,  0.        , -0.12063846],
-       [-1.37121003,  0.        ,  1.37121003],
-       [-0.46757093,  0.        ,  0.46757093],
-       [ 0.57664277,  0.        , -0.57664277],
-       [-0.34147676,  0.        ,  0.34147676],
-       [ 0.73977549,  0.        , -0.73977549],
-       [ 0.27220456,  0.        , -0.27220456],
-       [ 1.47860197,  0.        , -1.47860197],
-       [ 0.84711789,  0.        , -0.84711789],
-       [ 0.28420692,  0.        , -0.28420692]])
+array([[ 7.17188120e-01, -1.00730581e+00,  0.00000000e+00],
+       [ 3.11601821e-02, -3.96018612e-01,  0.00000000e+00],
+       [ 2.27775211e-01, -6.06768623e-02,  0.00000000e+00],
+       [-6.81694777e-01,  1.01733656e+00,  0.00000000e+00],
+       [ 1.93297635e-01,  1.22076139e+00,  0.00000000e+00],
+       [-9.06949125e-02, -1.23198542e-01,  0.00000000e+00],
+       [-4.21408288e-01,  4.16602959e-02,  0.00000000e+00],
+       [-3.53080804e-02,  6.37670107e-02,  0.00000000e+00],
+       [ 6.07716665e-02,  5.19727383e-01,  0.00000000e+00],
+       [ 2.94140633e-01, -5.61338817e-01,  0.00000000e+00],
+       [-1.23987245e+00,  3.57754302e-08, -1.23987241e+00],
+       [-1.23987279e+00, -3.57754302e-08, -1.23987282e+00],
+       [ 1.39812088e+00,  3.57754302e-08,  1.39812091e+00],
+       [-4.09009010e-02, -3.57754302e-08, -4.09009321e-02],
+       [-9.21266363e-01, -3.57754302e-08, -9.21266394e-01],
+       [ 1.35472650e+00,  3.57754302e-08,  1.35472653e+00],
+       [-3.14655510e-01, -3.57754302e-08, -3.14655541e-01],
+       [ 1.08995107e+00,  3.57754302e-08,  1.08995110e+00],
+       [-8.65010397e-01, -3.57754302e-08, -8.65010428e-01],
+       [-1.17395534e+00, -3.57754302e-08, -1.17395537e+00],
+       [-1.25057198e+00, -3.57754302e-08,  1.25057201e+00],
+       [-1.25057146e+00,  3.57754302e-08,  1.25057143e+00],
+       [-5.88209500e-01, -3.57754302e-08,  5.88209531e-01],
+       [ 4.56004204e-01, -3.57754302e-08, -4.56004173e-01],
+       [-2.20838188e-01,  3.57754302e-08,  2.20838156e-01],
+       [ 6.19136925e-01, -3.57754302e-08, -6.19136894e-01],
+       [ 3.92843130e-01,  3.57754302e-08, -3.92843161e-01],
+       [ 1.35796340e+00, -3.57754302e-08, -1.35796337e+00],
+       [ 7.26479324e-01, -3.57754302e-08, -7.26479293e-01],
+       [ 4.04845489e-01,  3.57754302e-08, -4.04845520e-01]])
 #+end_example
 
 That doesn't work but it's because *OMP normalizes columns*
@@ -179,42 +181,42 @@ normed_diff
 
 #+RESULTS:
 #+begin_example
-array([[-3.33066907e-16,  0.00000000e+00,  0.00000000e+00],
-       [-2.77555756e-16, -1.11022302e-16,  0.00000000e+00],
-       [-3.33066907e-16, -2.22044605e-16,  0.00000000e+00],
-       [ 1.11022302e-16, -1.11022302e-16,  0.00000000e+00],
-       [ 0.00000000e+00,  1.11022302e-16,  0.00000000e+00],
-       [ 0.00000000e+00,  2.22044605e-16,  0.00000000e+00],
-       [ 2.22044605e-16, -2.22044605e-16,  0.00000000e+00],
-       [ 2.22044605e-16,  0.00000000e+00,  0.00000000e+00],
-       [-4.99600361e-16, -4.44089210e-16,  0.00000000e+00],
-       [ 5.55111512e-17, -1.11022302e-16,  0.00000000e+00],
-       [ 1.11022302e-16,  0.00000000e+00,  1.11022302e-16],
-       [-1.11022302e-16,  0.00000000e+00, -1.11022302e-16],
-       [ 1.11022302e-16,  0.00000000e+00,  1.11022302e-16],
-       [-2.22044605e-16,  0.00000000e+00, -2.22044605e-16],
-       [-1.11022302e-16,  0.00000000e+00, -1.11022302e-16],
-       [ 1.11022302e-16,  0.00000000e+00,  1.11022302e-16],
-       [-2.22044605e-16,  0.00000000e+00, -2.22044605e-16],
-       [ 2.22044605e-16,  0.00000000e+00,  2.22044605e-16],
-       [-1.11022302e-16,  0.00000000e+00, -1.11022302e-16],
-       [-2.22044605e-16,  0.00000000e+00, -2.22044605e-16],
-       [-2.22044605e-16,  0.00000000e+00,  2.22044605e-16],
-       [ 2.22044605e-16,  0.00000000e+00, -2.22044605e-16],
-       [-1.11022302e-16,  0.00000000e+00,  1.11022302e-16],
-       [-2.22044605e-16,  0.00000000e+00,  2.22044605e-16],
-       [ 2.22044605e-16,  0.00000000e+00, -2.22044605e-16],
-       [-1.11022302e-16,  0.00000000e+00,  1.11022302e-16],
-       [ 1.11022302e-16,  0.00000000e+00, -1.11022302e-16],
-       [-1.11022302e-16,  0.00000000e+00,  1.11022302e-16],
-       [-1.11022302e-16,  0.00000000e+00,  1.11022302e-16],
-       [ 1.11022302e-16,  0.00000000e+00, -1.11022302e-16]])
+array([[-1.40462257e-08, -7.03725422e-08,  0.00000000e+00],
+       [ 1.32011651e-07,  1.09847589e-07,  0.00000000e+00],
+       [-1.80224232e-07, -9.65214547e-09,  0.00000000e+00],
+       [-6.11126105e-09, -3.50564821e-08,  0.00000000e+00],
+       [-5.88518767e-08,  7.25679982e-08,  0.00000000e+00],
+       [ 7.91342492e-08, -9.93669431e-08,  0.00000000e+00],
+       [ 2.10968947e-08, -9.03151364e-08,  0.00000000e+00],
+       [-2.09542494e-08, -2.90234570e-09,  0.00000000e+00],
+       [ 1.58232602e-08,  3.31394596e-08,  0.00000000e+00],
+       [-3.42565072e-08,  1.00459808e-07,  0.00000000e+00],
+       [ 1.01140355e-07,  6.64959625e-08,  1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08, -1.68587394e-07],
+       [ 1.01140355e-07,  6.64959625e-08,  1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08, -1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08, -1.68587394e-07],
+       [ 1.01140355e-07,  6.64959625e-08,  1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08, -1.68587394e-07],
+       [ 1.01140355e-07,  6.64959625e-08,  1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08, -1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08, -1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08,  1.68587394e-07],
+       [ 1.01140355e-07,  6.64959625e-08, -1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08,  1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08,  1.68587394e-07],
+       [ 1.01140355e-07,  6.64959625e-08, -1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08,  1.68587394e-07],
+       [ 1.01140355e-07,  6.64959625e-08, -1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08,  1.68587394e-07],
+       [-1.01140355e-07, -6.64959625e-08,  1.68587394e-07],
+       [ 1.01140355e-07,  6.64959625e-08, -1.68587394e-07]])
 #+end_example
 
-We can check that all the elements are close to zero:
+We can check that all the elements are close to zero. The computation runs in float32, so the residuals are around 1e-7 rather than 1e-16, and =np.isclose='s default =atol=1e-8= is too strict; we use float32 precision instead:
 
 #+BEGIN_SRC python :session ssc.org  :exports both
-np.all(np.isclose(normed_diff, 0))
+np.all(np.isclose(normed_diff, 0, atol=1e-6))
 #+END_SRC
 
 #+RESULTS:
@@ -299,21 +301,24 @@ elapsed = time.time() - start
 #+END_SRC
 
 #+RESULTS:
-: None
+: /var/folders/t7/9zd9yqf17_zbfq2hwm8tv9ym0000gn/T/babel-mZP6kW/python-SGrLJn
 
-#+BEGIN_SRC python :session ssc.org  :exports both :async
+#+BEGIN_SRC python :session ssc.org
 f"Fit time: {int(elapsed // 60)}m {int(elapsed) % 60}s"
 #+END_SRC
 
 #+RESULTS:
-: Fit time: 14m 11s
+: Fit time: 0m 29s
 
-#+BEGIN_SRC python :session ssc.org  :exports both :async
+#+BEGIN_SRC python :session ssc.org  :exports both 
 pd.Series(ssc_hd.labels_).value_counts()
 #+END_SRC
 
 #+RESULTS:
-: /var/folders/t7/9zd9yqf17_zbfq2hwm8tv9ym0000gn/T/babel-d7wG0u/python-udsQAW
+: 0    9989
+: 2    1010
+: 1    1001
+: Name: count, dtype: int64
 
 
 
@@ -335,7 +340,7 @@ sae_features.features.shape
 #+END_SRC
 
 #+RESULTS:
-| 45418 | 4096 |
+: /var/folders/t7/9zd9yqf17_zbfq2hwm8tv9ym0000gn/T/babel-mZP6kW/python-NNEbUX
 
 Ok so it seems like this number is consistent with what was used in interp-embed (apparently they also did the same filtering step)
 
@@ -482,6 +487,8 @@ goodfire_sae_ssc._coefs
 #+RESULTS:
 : <sae_research.sparse_subspace_clustering.SparseSubspaceClusteringOMP object at 0x131c1b5e0>
 
+Coefficient files computed before 2026-11-06 contain self-loops (a sample could be picked in its own representation after the first OMP iteration; fixed that day) and must be recomputed. The cache path below has a =_v2= suffix so old pickles are not loaded by accident.
+
 We select these numbers so that their product approximately equals feature dimensionality
 
 #+BEGIN_SRC python :session ssc.org  :exports both
@@ -496,9 +503,9 @@ k = 10
 import pickle
 from pathlib import Path
 
-goodfire_sae_ssc = SparseSubspaceClusteringOMP(n_clusters, k=k, batch_size=128)
+goodfire_sae_ssc = SparseSubspaceClusteringOMP(n_clusters, k=k, batch_size=1024)
 
-output_path = Path(f"data/goodfire_sae_ssc_coefs_k{k}.pkl")
+output_path = Path(f"data/goodfire_sae_ssc_coefs_k{k}_v2.pkl")
 if not output_path.exists():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     goodfire_sae_ssc.fit(sae_features.features)
@@ -528,6 +535,8 @@ f"Fit time: {int(elapsed // 60)}m {int(elapsed) % 60}s"
 
 #+RESULTS:
 : Fit time: 2m 0s
+
+The clustering results below come from the pre-fix coefficients (=data/goodfire_sae_ssc_coefs_k10.pkl=).
 
 #+BEGIN_SRC python :session ssc.org  :exports both
 pd.Series(goodfire_sae_ssc.labels_).value_counts()
